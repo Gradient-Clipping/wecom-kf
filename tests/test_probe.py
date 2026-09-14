@@ -1,4 +1,5 @@
 import base64
+from datetime import timedelta
 from pathlib import Path
 import runpy
 import unittest
@@ -40,8 +41,13 @@ class PublicProbeTests(unittest.TestCase):
                 return httpx.Response(200, content=b"success")
             return httpx.Response(200, content=message, headers={"Cache-Control": "no-store"})
 
+        def timed(request):
+            response = handle(request)
+            response.elapsed = timedelta(milliseconds=1)
+            return response
+
         original_client = httpx.Client
-        with patch.object(httpx, "Client", side_effect=lambda **kw: original_client(transport=httpx.MockTransport(handle), **kw)):
+        with patch.object(httpx, "Client", side_effect=lambda **kw: original_client(transport=httpx.MockTransport(timed), **kw)):
             result = PROBE["probe"](SETTINGS, True)
         self.assertTrue(all(item["passed"] for item in result["checks"]))
         self.assertEqual(len(posts), 2)
@@ -52,8 +58,14 @@ class PublicProbeTests(unittest.TestCase):
 
     def test_http_failure_is_reported_without_response_content(self):
         original_client = httpx.Client
-        transport = httpx.MockTransport(lambda _: httpx.Response(503, text="sensitive-provider-response"))
+        def unavailable(_):
+            response = httpx.Response(503, text="sensitive-provider-response")
+            response.elapsed = timedelta(milliseconds=1)
+            return response
+
+        transport = httpx.MockTransport(unavailable)
         with patch.object(httpx, "Client", side_effect=lambda **kw: original_client(transport=transport, **kw)):
             with self.assertRaises(RuntimeError) as error:
                 PROBE["probe"](SETTINGS)
         self.assertNotIn("sensitive-provider-response", str(error.exception))
+        self.assertIn("HTTP 503", str(error.exception))
