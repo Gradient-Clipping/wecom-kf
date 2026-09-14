@@ -1,5 +1,10 @@
 # Deployment
 
+Source: `Gradient-Clipping/wecom-kf`; callback host: `kf.lazycampus.com`.
+Internal Kubernetes/database/registry identifiers retain `educoder-wecom` from the
+initial bootstrap to preserve data and avoid unrelated resource recreation. These
+are implementation identifiers, not a restriction to one business service.
+
 Desired state lives in `Gradient-Clipping/server-gitops`:
 
 - `clusters/easy-platform/apps/educoder-wecom/`: API, service, ingress, network

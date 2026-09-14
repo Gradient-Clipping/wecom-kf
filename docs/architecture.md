@@ -26,6 +26,15 @@ Reference files in GitOps: `README.md`, `clusters/easy-platform/kustomization.ya
 
 ## Suggested Service Shape
 
+The platform repository is `Gradient-Clipping/wecom-kf`, with the `wecom_kf`
+Python package and `https://kf.lazycampus.com` public host. Shared components own
+WeCom transport, conversations, administrator SSO, authorization and job delivery.
+Business-specific operations belong to separate service adapters; EduCoder is the
+first planned adapter. Route commands through explicitly registered capabilities
+and service permissions, not an unrestricted model-selected import or shell.
+Future adapters must not depend on EduCoder credentials or its question bank.
+This release has no adapters or execution worker yet.
+
 Use a Python FastAPI HTTP boundary and a separate synchronous worker process that
 imports the existing EduCoder library. Do not execute `example.py` or parse its
 stdout from a web request. Start with one API replica and one worker deployment;
@@ -134,6 +143,10 @@ production must not depend on a local `../educoder` path.
 - Validate OIDC state, nonce and PKCE, use secure HttpOnly session cookies and check
   administrator roles on the backend. An authenticated non-admin receives 403,
   not a redirect loop. Callback and health routes must never require SSO.
+- Reuse `https://auth.lazycampus.com/realms/lazycampus` and backend checks for the
+  existing `platform-admin` realm role. Create a separate confidential client for
+  this platform when the administrator frontend is implemented; no SSO client or
+  frontend is provisioned in the callback-only release.
 - Bind accounts through an explicitly authorized administrative workflow. Do not
   ask customers to put passwords directly in customer-service messages. Any future
   customer credential handoff needs a separately approved secure design.

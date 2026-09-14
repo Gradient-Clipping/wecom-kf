@@ -1,4 +1,4 @@
-"""Durable, idempotent storage of authenticated encrypted event packets."""
+"""Service-independent durable storage of authenticated encrypted event packets."""
 
 import hashlib
 

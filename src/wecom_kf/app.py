@@ -14,7 +14,7 @@ from .inbox import MySQLInbox
 
 CALLBACK_PATH = "/callbacks/wecom/kf"
 MAX_BODY = 65536
-logger = logging.getLogger("educoder_wecom")
+logger = logging.getLogger("wecom_kf")
 
 
 def create_app(settings: Settings | None = None, inbox=None) -> FastAPI:

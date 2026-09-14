@@ -7,8 +7,8 @@ from unittest.mock import patch
 
 import httpx
 
-from educoder_wecom.config import Settings
-from educoder_wecom.crypto import CallbackCrypto, InvalidCallback, parse_xml, xml_field
+from wecom_kf.config import Settings
+from wecom_kf.crypto import CallbackCrypto, InvalidCallback, parse_xml, xml_field
 
 PROBE = runpy.run_path(str(Path(__file__).resolve().parents[1] / "deploy/verify_callback.py"))
 SETTINGS = Settings("ww_test", "testToken", base64.b64encode(bytes(range(32))).decode().rstrip("="))

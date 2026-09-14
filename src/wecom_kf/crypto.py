@@ -1,4 +1,4 @@
-"""WeCom's signed AES-CBC envelope, using the cryptography implementation.
+"""WeChat Customer Service signed AES-CBC envelope, using cryptography.
 
 Protocol: https://developer.work.weixin.qq.com/document/path/90968
 SHA-1 and the key-derived IV are mandated by this external protocol, not a new

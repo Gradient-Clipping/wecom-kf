@@ -1,4 +1,4 @@
-"""Runtime settings; credential values are never included in representations."""
+"""Shared callback settings; credentials are never included in representations."""
 
 import os
 from dataclasses import dataclass, field

@@ -1,7 +1,7 @@
 # Callback Configuration
 
 ```text
-https://educoder.lazycampus.com/callbacks/wecom/kf
+https://kf.lazycampus.com/callbacks/wecom/kf
 ```
 
 Use this URL without a trailing slash in **WeChat Customer Service** callback

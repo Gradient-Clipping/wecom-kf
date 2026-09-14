@@ -11,10 +11,10 @@ from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 from fastapi.testclient import TestClient
 
-from educoder_wecom.app import CALLBACK_PATH, create_app
-from educoder_wecom.config import Settings
-from educoder_wecom.crypto import CallbackCrypto, InvalidCallback
-from educoder_wecom.inbox import MySQLInbox
+from wecom_kf.app import CALLBACK_PATH, create_app
+from wecom_kf.config import Settings
+from wecom_kf.crypto import CallbackCrypto, InvalidCallback
+from wecom_kf.inbox import MySQLInbox
 
 KEY = base64.b64encode(bytes(range(32))).decode().rstrip("=")
 SETTINGS = Settings(corp_id="ww_test_corp", token="testToken123", aes_key=KEY)
@@ -106,7 +106,7 @@ class CallbackTests(unittest.TestCase):
     def test_inbox_failure_is_not_acknowledged_or_logged_with_payload(self):
         self.inbox.record.side_effect = RuntimeError("sensitive-database-password")
         encrypted = encrypt(event_xml())
-        with self.assertLogs("educoder_wecom", level="ERROR") as logs:
+        with self.assertLogs("wecom_kf", level="ERROR") as logs:
             response = self.client.post(CALLBACK_PATH, params=params(encrypted),
                                         content=f"<xml><Encrypt>{encrypted}</Encrypt></xml>")
         self.assertEqual(response.status_code, 503)

@@ -7,7 +7,7 @@ on:
 permissions:
   contents: read
 concurrency:
-  group: educoder-wecom-${{ github.ref }}
+  group: wecom-kf-${{ github.ref }}
   cancel-in-progress: true
 jobs:
   verify:

@@ -2,6 +2,7 @@
 !pyproject.toml
 !uv.lock
 !src/
-!src/**
+!src/wecom_kf/
+!src/wecom_kf/**
 **/__pycache__/
 **/*.pyc

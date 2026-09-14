@@ -1,13 +1,15 @@
-# EduCoder WeCom
+# WeCom KF
 
-Minimal WeChat Customer Service callback receiver. Source is maintained in the
-private `Gradient-Clipping/educoder-wecom` repository; production desired state is
+Shared WeChat Customer Service integration platform, initially callback-only.
+EduCoder is a planned service integration, not the platform's identity.
+Source is maintained in the
+private `Gradient-Clipping/wecom-kf` repository; production desired state is
 maintained in `Gradient-Clipping/server-gitops`.
 
 ## Callback
 
 ```text
-https://educoder.lazycampus.com/callbacks/wecom/kf
+https://kf.lazycampus.com/callbacks/wecom/kf
 ```
 
 GET verifies the signature, decrypts `echostr`, checks the enterprise receive ID
@@ -27,7 +29,7 @@ API Secret is not required or loaded. See [configuration](docs/callback-setup.md
 ```powershell
 uv sync --python 3.13
 uv run python -m unittest discover -s tests -v
-uv run --env-file .env uvicorn educoder_wecom.app:create_app --factory --port 8000 --no-access-log
+uv run --env-file .env uvicorn wecom_kf.app:create_app --factory --port 8000 --no-access-log
 ```
 
 Populate callback and MySQL settings from `.env.example`. Startup creates the

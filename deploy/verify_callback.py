@@ -17,10 +17,10 @@ import httpx
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
-from educoder_wecom.config import Settings
-from educoder_wecom.crypto import CallbackCrypto
+from wecom_kf.config import Settings
+from wecom_kf.crypto import CallbackCrypto
 
-BASE_URL = "https://educoder.lazycampus.com"
+BASE_URL = "https://kf.lazycampus.com"
 CALLBACK = BASE_URL + "/callbacks/wecom/kf"
 
 
