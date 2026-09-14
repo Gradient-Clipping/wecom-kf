@@ -1,13 +1,13 @@
 # Deployment
 
 Source: `Gradient-Clipping/wecom-kf`; callback host: `kf.lazycampus.com`.
-Internal Kubernetes/database/registry identifiers retain `educoder-wecom` from the
-initial bootstrap to preserve data and avoid unrelated resource recreation. These
-are implementation identifiers, not a restriction to one business service.
+The Kubernetes namespace is `wecom-kf`. The shared database, Secret names and
+registry identifiers retain their existing names. Namespace migration preserves
+the database, encryption keys and a verified copy of the persistent question bank.
 
 Desired state lives in `Gradient-Clipping/server-gitops`:
 
-- `clusters/easy-platform/apps/educoder-wecom/`: API, service, ingress, network
+- `clusters/easy-platform/apps/wecom-kf/`: API, service, ingress, network
   policy and Flux image tracking.
 - `host/nginx/educoder-wecom`: scoped origin route; query access logging disabled.
 - `scripts/bootstrap-educoder-wecom.sh`: root-only runtime restoration and host setup.
