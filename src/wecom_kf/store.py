@@ -10,6 +10,7 @@ from cryptography.fernet import Fernet
 from pymysql.cursors import DictCursor
 
 from .inbox import MySQLInbox
+from .history import visible_content
 
 DDL = (
     """CREATE TABLE IF NOT EXISTS kf_meta (
@@ -49,6 +50,15 @@ DDL = (
         expires_at DOUBLE NOT NULL, KEY pending (status,available_at), KEY customer (customer_id,seq)) ENGINE=InnoDB""",
     """CREATE TABLE IF NOT EXISTS kf_workers (
         role VARCHAR(32) PRIMARY KEY, heartbeat DOUBLE NOT NULL) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS kf_message_history (
+        id VARCHAR(80) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+        customer_id CHAR(64) NOT NULL, open_kfid VARCHAR(128) NOT NULL,
+        direction VARCHAR(8) NOT NULL, message_id CHAR(64) NULL, outbox_id CHAR(32) NULL,
+        message_type VARCHAR(24) NOT NULL, content_text TEXT NOT NULL,
+        content_redacted BOOLEAN NOT NULL, content_truncated BOOLEAN NOT NULL,
+        sent_at DOUBLE NULL, created_at DOUBLE NOT NULL,
+        KEY retention (created_at), KEY conversation (customer_id,created_at)
+        ) ENGINE=InnoDB""",
 )
 
 
@@ -124,6 +134,25 @@ class Store(MySQLInbox):
                 expires = row["last_input"] + 48 * 3600
             cursor.execute("INSERT INTO kf_outbox (id,customer_id,payload,created_at,available_at,expires_at) VALUES (%s,%s,%s,%s,%s,%s)",
                            (mid, row["id"], self.pack(payload), now, now, expires))
+            self.remember_message(cursor, row, state, mid, reply, direction="outbound")
+
+    def remember_message(self, cursor, row, state, source_id, message, *, direction="inbound", binding=None):
+        if binding is None:
+            binding = self.binding(cursor, row["id"])
+        secrets = [(binding or {}).get("password"), state.get("pending", {}).get("password")]
+        kind, content, redacted, truncated = visible_content(
+            message, password_entry=direction == "inbound" and state.get("phase") == "password" and message.get("msgtype") != "event",
+            known_secrets=secrets,
+        )
+        sent_at = message.get("send_time") if direction == "inbound" else None
+        if not isinstance(sent_at, (int, float)) or sent_at <= 0:
+            sent_at = None
+        cursor.execute("""INSERT IGNORE INTO kf_message_history
+            (id,customer_id,open_kfid,direction,message_id,outbox_id,message_type,content_text,content_redacted,content_truncated,sent_at,created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)""",
+            (direction + ":" + source_id, row["id"], row["open_kfid"], direction,
+             source_id if direction == "inbound" else None, source_id if direction == "outbound" else None,
+             kind, content, redacted, truncated, sent_at, time.time()))
 
     def claim(self, kinds):
         with self.transaction() as cursor:

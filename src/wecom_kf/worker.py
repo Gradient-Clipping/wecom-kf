@@ -128,6 +128,8 @@ class Worker:
                 return True
             row, state = store.customer(cur, external, kfid)
             binding = store.binding(cur, row["id"])
+            # Capture before advancing the dialog, while password-entry context is known.
+            store.remember_message(cur, row, state, record["id"], message, binding=binding)
             now = time.time()
             if not entered:
                 row.update(last_input=max(row["last_input"], float(message.get("send_time", now))),
@@ -164,7 +166,7 @@ class Worker:
 
     @staticmethod
     def _processed(cur, record):
-        # Dedupe tombstone remains; raw customer text/password is erased.
+        # Dedupe and sanitized history remain; raw customer payload/password is erased.
         cur.execute("UPDATE kf_messages SET status='processed',payload=NULL WHERE id=%s", (record["id"],))
 
     def outbox(self):
@@ -315,6 +317,7 @@ class Worker:
                     cur.execute("UPDATE kf_outbox SET status='expired' WHERE customer_id=%s AND status='pending'", (row["id"],))
             cur.execute("DELETE FROM wecom_callback_inbox WHERE processed_at IS NOT NULL AND received_at < CURRENT_TIMESTAMP - INTERVAL 7 DAY")
             cur.execute("DELETE FROM kf_messages WHERE status IN ('processed','historical') AND created_at<%s", (time.time() - 7 * 86400,))
+            cur.execute("DELETE FROM kf_message_history WHERE created_at<%s LIMIT 1000", (time.time() - 7 * 86400,))
 
     def run(self, role):
         if not self.settings.processing_enabled or not self.settings.open_kfid or (role == "gateway" and not self.settings.api_secret):

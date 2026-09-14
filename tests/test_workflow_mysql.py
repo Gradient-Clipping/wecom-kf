@@ -29,7 +29,7 @@ class WorkflowTests(unittest.TestCase):
 
     def setUp(self):
         with self.store.transaction() as cur:
-            for table in ("kf_customers", "kf_bindings", "kf_jobs", "kf_messages", "kf_outbox", "kf_cursors"):
+            for table in ("kf_customers", "kf_bindings", "kf_jobs", "kf_messages", "kf_outbox", "kf_cursors", "kf_message_history"):
                 cur.execute(f"DELETE FROM {table}")
         self.api, self.service = Mock(), Mock()
         self.worker = Worker(self.settings, self.store, self.api, self.service)
@@ -99,6 +99,34 @@ class WorkflowTests(unittest.TestCase):
         self.send("anything")
         self.assertEqual(self.state()["phase"], "idle")
         self.assertNotIn("pending", self.state())
+
+    def test_history_preserves_both_directions_redacts_credentials_and_deduplicates(self):
+        self.bind()
+        mid = self.send("看看任务进度")
+        self.send("看看任务进度", mid=mid)
+        with self.store.transaction() as cur:
+            cur.execute("SELECT * FROM kf_message_history ORDER BY created_at")
+            rows = cur.fetchall()
+            incoming = [r for r in rows if r['direction'] == 'inbound']
+            outgoing = [r for r in rows if r['direction'] == 'outbound']
+            self.assertEqual(sum(r['message_id'] == mid for r in incoming), 1)
+            self.assertTrue(any(r['content_text'] == '看看任务进度' for r in incoming))
+            self.assertTrue(any('请选择服务' in r['content_text'] for r in outgoing))
+            self.assertTrue(any(r['content_redacted'] and r['content_text'] == '[凭据已隐藏]' for r in incoming))
+            self.assertFalse(any(' passＡ word ' in r['content_text'] for r in rows))
+            self.assertTrue(all(r['outbox_id'] and r['sent_at'] is None for r in outgoing))
+            cur.execute("SELECT COUNT(*) AS n FROM kf_message_history h JOIN kf_outbox o ON h.outbox_id=o.id WHERE o.status='pending'")
+            self.assertEqual(cur.fetchone()['n'], len(outgoing))
+
+    def test_history_expires_after_seven_days_without_erasing_recent_content(self):
+        old = self.send('old')
+        recent = self.send('recent')
+        with self.store.transaction() as cur:
+            cur.execute("UPDATE kf_message_history SET created_at=%s WHERE message_id=%s", (time.time()-8*86400, old))
+        self.worker.cleanup()
+        with self.store.transaction() as cur:
+            cur.execute("SELECT message_id FROM kf_message_history WHERE direction='inbound'")
+            self.assertEqual([r['message_id'] for r in cur.fetchall()], [recent])
 
     def test_failure_limit_survives_worker_restart_and_isolates_users(self):
         self.service.verify.side_effect = InvalidCredentials()

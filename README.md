@@ -23,6 +23,20 @@ and no login button. Customer interactions take place in WeChat Customer Service
 Callback verification needs CorpID, Token and EncodingAESKey. Message processing
 also requires the API Secret and a configured OpenKfId. See [runtime operations](docs/runtime.md).
 
+## Conversation history
+
+`kf_message_history` retains seven days of incoming text and visible reply/menu
+content, linked to the customer and the original message or outbox row. It is
+written in the same transaction as message handling or reply registration, so
+retries do not duplicate history. A queued reply is not proof of delivery; its
+status remains in `kf_outbox`.
+
+Password-entry messages, known account passwords and explicitly labeled credentials
+are redacted before storage. Menu action IDs, welcome codes and media payloads are
+excluded; nontext messages retain their type. The history is available to the
+Agent through scoped read-only views. Previously erased incoming content cannot
+be reconstructed; recording starts with this release.
+
 ## Development
 
 ```powershell
