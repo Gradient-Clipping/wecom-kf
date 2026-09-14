@@ -55,7 +55,7 @@ def menu(state, title, choices, tail="", lines=()):
 
 
 def services(state):
-    return menu(state, "请选择服务", [("头歌", {"op": "educoder"})])
+    return menu(state, "请选择服务", [("1. 头歌", {"op": "educoder"})], "点击菜单或回复服务序号。")
 
 
 def list_menu(state, page=0):

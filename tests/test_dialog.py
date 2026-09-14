@@ -11,6 +11,13 @@ def items(count):
 
 
 class DialogTests(unittest.TestCase):
+    def test_service_menu_is_numbered_and_accepts_full_width_number(self):
+        state = {}
+        message = d.services(state)
+        self.assertEqual(message["msgmenu"]["list"][0]["click"]["content"], "1. 头歌")
+        d.advance(state, None, "１", now=1)
+        self.assertEqual(state["phase"], "account")
+
     def test_normalization_and_validation(self):
         self.assertEqual(d.selection("１， ２、\n３\u200b\ufeff", 4), [0, 1, 2])
         self.assertEqual(d.selection("０", 3), [0, 1, 2])
