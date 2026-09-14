@@ -35,6 +35,17 @@ are installed by the versioned bootstrap. Check rollout, DNS, valid HTTPS, signe
 GET, rejected invalid signatures, encrypted POST and durable deduplication before
 asking an administrator to save the WeCom callback configuration.
 
+Repeat the external verification without printing signed URLs or credentials:
+
+```powershell
+uv run --env-file .env python deploy/verify_callback.py --report reports/public-verification.json
+```
+
+Add `--post` to send two copies of a uniquely identified synthetic notification.
+Verify its reported digest has a single ciphertext row and `delivery_count=2` in
+the inbox, then delete only that synthetic row. HTTP acknowledgements alone are
+not evidence of correct database deduplication. Reports contain no credentials.
+
 Rollback: revert the scoped GitOps image/config commit and let validation promote
 it; retain runtime keys and inbox data. AES key rotation needs a deliberate data
 migration/key retention procedure because pending ciphertext uses the previous

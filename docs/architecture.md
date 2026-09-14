@@ -126,6 +126,14 @@ production must not depend on a local `../educoder` path.
   `.env` account available to every customer who sends a message.
 - The web frontend is administrator-only, protected by administrator identity and
   authorization. Customers interact through WeChat Customer Service, not a web UI.
+- Administrator SSO is automatic on entry, using the platform's existing identity
+  provider. Check the server session first; if absent, begin the OIDC authorization
+  redirect automatically, without a login button. Reuse a valid SSO session so
+  already authenticated administrators need no extra interaction. An expired IdP
+  session may still require authentication; never bypass it to appear seamless.
+- Validate OIDC state, nonce and PKCE, use secure HttpOnly session cookies and check
+  administrator roles on the backend. An authenticated non-admin receives 403,
+  not a redirect loop. Callback and health routes must never require SSO.
 - Bind accounts through an explicitly authorized administrative workflow. Do not
   ask customers to put passwords directly in customer-service messages. Any future
   customer credential handoff needs a separately approved secure design.

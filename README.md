@@ -42,7 +42,7 @@ admin or end-user routes. Both execution feature gates must remain false.
 
 CI verifies the application and database integration, then publishes immutable
 TCR tags. Flux follows validated GitOps production revisions. Runtime credentials
-are excluded from Git and container builds. Access logging is disabled; payloads
+are excluded from Git and container builds. Application/origin access logging is disabled; payloads
 and query parameters are not logged. Kubernetes network policy allows only DNS
 and MySQL egress. The edge disables caching and authenticates requests to the
 dedicated origin virtual host.
