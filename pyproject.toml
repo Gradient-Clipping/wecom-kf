@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "educoder-wecom"
+version = "0.1.0"
+description = "Authenticated WeChat Customer Service callback receiver"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30,<1",
+  "cryptography>=46",
+  "defusedxml>=0.7,<1",
+  "pymysql[rsa]>=1.1,<2",
+]
+
+[dependency-groups]
+dev = ["httpx>=0.27,<1", "python-dotenv>=1,<2"]
+
+[tool.setuptools.packages.find]
+where = ["src"]
