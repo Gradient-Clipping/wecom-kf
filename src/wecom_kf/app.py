@@ -1,4 +1,4 @@
-"""Callback-only API. No admin UI, customer UI, message sender or solver."""
+"""Fast callback acknowledgement; chat processing runs in isolated workers."""
 
 import logging
 import time
@@ -29,6 +29,9 @@ def create_app(settings: Settings | None = None, inbox=None) -> FastAPI:
 
     app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None,
                   redirect_slashes=False)
+    if settings.oidc_secret:
+        from .admin import install_admin
+        install_admin(app, settings)
 
     @app.middleware("http")
     async def no_cache(request, call_next):
@@ -39,8 +42,9 @@ def create_app(settings: Settings | None = None, inbox=None) -> FastAPI:
 
     @app.get("/healthz")
     def health():
-        return {"status": "ok", "mode": "callback-only", "execution_enabled": False,
-                "message_processing_enabled": False, "revision": settings.revision}
+        return {"status": "ok", "mode": "customer-service" if settings.processing_enabled else "callback-only",
+                "execution_enabled": settings.execution_enabled,
+                "message_processing_enabled": settings.processing_enabled, "revision": settings.revision}
 
     @app.get("/readyz")
     def ready():
@@ -48,7 +52,7 @@ def create_app(settings: Settings | None = None, inbox=None) -> FastAPI:
             inbox.ping()
         except Exception:
             return JSONResponse({"status": "unavailable"}, status_code=503)
-        return {"status": "ready", "mode": "callback-only", "revision": settings.revision}
+        return {"status": "ready", "mode": "customer-service" if settings.processing_enabled else "callback-only", "revision": settings.revision}
 
     def query(request: Request, name: str) -> str:
         values = request.query_params.getlist(name)

@@ -4,5 +4,9 @@
 !src/
 !src/wecom_kf/
 !src/wecom_kf/**
+!src/educoder/
+!src/educoder/**
+!resources/
+!resources/question_bank.sqlite
 **/__pycache__/
 **/*.pyc

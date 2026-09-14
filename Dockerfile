@@ -5,6 +5,7 @@ WORKDIR /app
 ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 UV_COMPILE_BYTECODE=0
 COPY pyproject.toml uv.lock ./
 COPY src ./src
+COPY resources /opt/seed
 RUN uv sync --frozen --no-dev --no-cache && useradd --uid 1000 --create-home app
 ARG REVISION=development
 ENV APP_REVISION=$REVISION PATH=/app/.venv/bin:$PATH

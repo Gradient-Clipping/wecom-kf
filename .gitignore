@@ -18,3 +18,4 @@ reports/
 *.db
 *.pem
 *.key
+!resources/question_bank.sqlite

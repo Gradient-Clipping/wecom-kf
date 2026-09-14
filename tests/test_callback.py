@@ -141,12 +141,11 @@ class CallbackTests(unittest.TestCase):
         self.inbox.ping.side_effect = RuntimeError()
         self.assertEqual(self.client.get("/readyz").status_code, 503)
 
-    def test_settings_redact_secrets_and_forbid_enabling_unimplemented_features(self):
+    def test_settings_redact_secrets_and_enable_explicit_features(self):
         self.assertNotIn(SETTINGS.token, repr(SETTINGS))
         self.assertNotIn(KEY, repr(SETTINGS))
         with patch.dict(os.environ, {"EDUCODER_EXECUTION_ENABLED": "true"}):
-            with self.assertRaises(ValueError):
-                Settings.from_env()
+            self.assertTrue(Settings.from_env().execution_enabled)
 
 
 @unittest.skipUnless(os.getenv("TEST_MYSQL") == "1", "Requires isolated integration-test MySQL")

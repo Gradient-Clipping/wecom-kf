@@ -36,7 +36,7 @@ def envelope(message, settings):
     return encrypted, {"timestamp": timestamp, "nonce": nonce, "msg_signature": signature}
 
 
-def probe(settings, post=False):
+def probe(settings, post=False, full=False):
     CallbackCrypto(settings.corp_id, settings.token, settings.aes_key)
     report = {"base_url": BASE_URL, "checked_at": int(time.time()), "checks": []}
 
@@ -54,12 +54,21 @@ def probe(settings, post=False):
         health = client.get(BASE_URL + "/healthz")
         record("health", health, 200)
         state = health.json()
-        if state.get("execution_enabled") is not False or state.get("message_processing_enabled") is not False:
-            raise RuntimeError("Callback-only feature gates differ")
+        if state.get("execution_enabled") is not full or state.get("message_processing_enabled") is not full:
+            raise RuntimeError("Feature gates differ from expected mode")
         report["revision"] = state.get("revision")
         record("database_ready", client.get(BASE_URL + "/readyz"), 200)
         record("unsigned_rejected", client.get(CALLBACK), 403)
-        record("no_frontend", client.get(BASE_URL + "/admin"), 404)
+        if full:
+            admin = client.get(BASE_URL + "/admin")
+            record("automatic_sso", admin, 302)
+            from urllib.parse import urlparse, parse_qs
+            url = urlparse(admin.headers.get("location", ""))
+            params = parse_qs(url.query)
+            if url.netloc != "auth.lazycampus.com" or params.get("code_challenge_method") != ["S256"]:
+                raise RuntimeError("Unexpected SSO redirect")
+        else:
+            record("no_frontend", client.get(BASE_URL + "/admin"), 404)
         expected = ("verification-" + uuid.uuid4().hex).encode()
         encrypted, query = envelope(expected, settings)
         response = client.get(CALLBACK, params={**query, "echostr": encrypted})
@@ -88,10 +97,11 @@ def probe(settings, post=False):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--post", action="store_true")
+    parser.add_argument("--full", action="store_true")
     parser.add_argument("--report", type=Path)
     args = parser.parse_args()
     try:
-        report = probe(Settings.from_env(), args.post)
+        report = probe(Settings.from_env(), args.post, args.full)
     except httpx.HTTPError:
         raise SystemExit("Public callback network request failed; signed URL and payload withheld") from None
     except (RuntimeError, ValueError) as error:
