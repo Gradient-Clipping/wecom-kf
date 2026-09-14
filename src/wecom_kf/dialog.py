@@ -89,7 +89,7 @@ def confirmation(state, page=0):
     if page + 1 < pages:
         choices.append(("下一页已选", {"op": "selected_page", "page": page + 1}))
     return menu(state, f"已选{len(selected)}个实训，请核对后确认（第{page + 1}/{pages}页）", choices,
-                "可以直接重新输入序号重选；重新选择后需要再次确认。仅处理尚未通过的关卡。", lines)
+                "若有误可以直接重新输入序号重选。", lines)
 
 
 def begin_list(state):
@@ -128,7 +128,7 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         if binding:
             return begin_list(state)
         state.update(phase="account", pending={}, actions={})
-        return [text("请输入你的头歌账号。每个微信只能绑定一个头歌账号。")], None
+        return [text("请输入你的头歌账号。每个微信只能绑定一个头歌账号，后续不可更改。")], None
     if phase == "idle":
         replies = [services(state)]
         if state.get("last_result"):
@@ -139,7 +139,7 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         if menu_id or not value or len(value) > 256 or any(c in value for c in "\r\n\x00"):
             return [text(INVALID)], None
         state.update(phase="password", pending={"account": value}, actions={})
-        return [text("请输入头歌密码。验证成功并确认绑定后，账号密码将以明文保存在服务数据库，用于后续登录；密码不会回显。")], None
+        return [text("请输入头歌密码。验证成功并确认后不可更改。")], None
     if phase == "password":
         # Passwords are opaque: never normalize width, trim spaces, or echo them.
         if menu_id or not content or len(content) > 1024 or "\x00" in content:
@@ -160,7 +160,7 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
             if not execution_enabled:
                 return [text("执行服务暂未开放，请稍后再试。")], None
             state.update(phase="running", actions={})
-            return [text("已确认，任务已加入队列。将逐一完成所选实训，已通过的关卡会跳过，结束后会通知你。")], "solve"
+            return [text("已确认，任务已加入队列，结束后会通知你。")], "solve"
         if op == "page":
             state["phase"] = "select"
             return [list_menu(state, action["page"])], None
@@ -185,17 +185,17 @@ def verified(state, profile, *, invalid=False, unavailable=False, now=0):
         return [text(f"账号或密码错误，剩余{3 - failures}次重试机会。请重新输入头歌账号。")]
     if unavailable:
         state.update(pending={}, phase="account", actions={})
-        return [text("头歌暂时无法验证（网络、验证码或服务异常），本次不扣重试次数。请稍后重新输入账号。")]
+        return [text("头歌暂时无法验证（网络、验证码或服务异常），请稍后重试。")]
     state.update(phase="bind", failures=0, blocked_until=0, profile=profile)
     label = f"验证成功\n登录号：{profile['login']}\n用户名：{profile['username']}\n手机号：{profile['phone']}"
     return [menu(state, label, [("确认绑定", {"op": "bind"}), ("重新输入账号", {"op": "cancel_bind"})],
-                 "确认后此微信将绑定该账号，并明文保存账号密码用于后续登录。")]
+                 "确认后此微信将绑定该账号，后续不可更改。")]
 
 
 def listed(state, items, *, failed=False):
     if failed:
         state.update(phase="idle", actions={})
-        return [text("实训查询失败，账号绑定仍保留。请稍后选择头歌重试。"), services(state)]
+        return [text("实训查询失败，请稍后重试。"), services(state)]
     state.update(items=items, selected=[], actions={})
     if not items:
         state["phase"] = "idle"
