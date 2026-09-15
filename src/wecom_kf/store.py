@@ -11,6 +11,7 @@ from pymysql.cursors import DictCursor
 
 from .inbox import MySQLInbox
 from .history import visible_content
+from .service_catalog import SERVICES
 
 DDL = (
     """CREATE TABLE IF NOT EXISTS kf_purchases (
@@ -109,6 +110,22 @@ class Store(MySQLInbox):
     def customer_id(self, external):
         return hashlib.sha256((self.settings.corp_id + ":" + external).encode()).hexdigest()
 
+    def service_states(self, cursor=None):
+        if cursor is None:
+            with self.transaction() as cur:
+                return self.service_states(cur)
+        cursor.execute("SELECT name,value FROM kf_meta WHERE name LIKE 'service:%'")
+        flags = {row["name"][8:]: json.loads(row["value"]) for row in cursor.fetchall()}
+        return [{"code": code, "name": name, "enabled": flags.get(code, {}).get("enabled", True) is True}
+                for code, name in SERVICES.items()]
+
+    def set_service_enabled(self, code, enabled, actor):
+        if code not in SERVICES or not isinstance(enabled, bool):
+            raise ValueError("Unknown service")
+        with self.transaction() as cur:
+            cur.execute("INSERT INTO kf_meta (name,value) VALUES (%s,%s) ON DUPLICATE KEY UPDATE value=VALUES(value)",
+                        ("service:" + code, json.dumps({"enabled": enabled, "updated_at": time.time(), "actor": actor})))
+
     def customer(self, cursor, external, open_kfid):
         cid = self.customer_id(external)
         cursor.execute("INSERT IGNORE INTO kf_customers (id,external_userid,open_kfid,state,updated_at) VALUES (%s,%s,%s,%s,%s)",
@@ -139,6 +156,10 @@ class Store(MySQLInbox):
 
     def reply(self, cursor, row, state, replies, *, welcome_code="", sent_at=None):
         now = time.time()
+        state["available_services"] = [s for s in self.service_states(cursor) if s["enabled"]]
+        if replies and not state["available_services"]:
+            state["actions"] = {}
+            replies = [{"msgtype": "text", "text": {"content": "暂无服务。"}}]
         state["expires_at"] = now + 300
         for reply in replies:
             mid = uuid.uuid4().hex

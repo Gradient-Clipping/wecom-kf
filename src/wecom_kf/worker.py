@@ -143,6 +143,7 @@ class Worker:
                 self._processed(cur, record)
                 return True
             content = message.get("text", {}) if message.get("msgtype") == "text" else {}
+            state["available_services"] = [s for s in store.service_states(cur) if s["enabled"]]
             replies, kind = dialog.advance(state, binding, content.get("content"), content.get("menu_id", ""),
                                            entered=entered, now=now, execution_enabled=self.settings.execution_enabled,
                                            payment_enabled=self.settings.payment_enabled)
@@ -200,6 +201,11 @@ class Worker:
             cur.execute("SELECT * FROM kf_customers WHERE id=%s FOR UPDATE", (item["customer_id"],))
             row = cur.fetchone()
             payload = store.unpack(item["payload"])
+            if not any(s["enabled"] for s in store.service_states(cur)):
+                payload = {key: value for key, value in payload.items() if key in {"msgid", "code", "touser", "open_kfid"}}
+                payload.update(msgtype="text", text={"content": "暂无服务。"})
+                cur.execute("UPDATE kf_outbox SET payload=%s WHERE id=%s", (store.pack(payload), item["id"]))
+                cur.execute("UPDATE kf_message_history SET message_type='text',content_text=%s WHERE outbox_id=%s", ("暂无服务。", item["id"]))
             if item["expires_at"] <= now or ("code" not in payload and row["reply_count"] >= 5):
                 cur.execute("UPDATE kf_outbox SET status='deferred',error_code='reply_window' WHERE id=%s", (item["id"],))
                 return True
@@ -243,6 +249,18 @@ class Worker:
             state = store.unpack(row["state"])
             binding = store.binding(cur, row["id"])
             obsolete = state.get("job_id") != job["id"] or (job["kind"] in {"verify", "list"} and state.get("expires_at", 0) <= time.time())
+            state["available_services"] = [s for s in store.service_states(cur) if s["enabled"]]
+            closed = not any(s["code"] == "educoder" for s in state["available_services"])
+            new_purchase = False
+            if closed and job["kind"] == "purchase":
+                cur.execute("SELECT id FROM kf_purchases WHERE id=%s", (job["id"],))
+                new_purchase = cur.fetchone() is None
+            if closed and (job["kind"] in {"verify", "list"} or new_purchase):
+                obsolete = True
+                state.update(phase="idle", pending={}, actions={})
+                state.pop("job_id", None)
+                store.reply(cur, row, state, [dialog.services(state)])
+                store.save_customer(cur, row, state)
             if obsolete:
                 cur.execute("UPDATE kf_jobs SET status='cancelled',payload=NULL WHERE id=%s", (job["id"],))
                 return True

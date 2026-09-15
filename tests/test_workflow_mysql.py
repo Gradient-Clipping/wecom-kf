@@ -29,6 +29,7 @@ class WorkflowTests(unittest.TestCase):
 
     def setUp(self):
         with self.store.transaction() as cur:
+            cur.execute("DELETE FROM kf_meta WHERE name LIKE 'service:%'")
             for table in ("kf_customers", "kf_bindings", "kf_jobs", "kf_messages", "kf_outbox", "kf_cursors", "kf_message_history"):
                 cur.execute(f"DELETE FROM {table}")
         self.api, self.service = Mock(), Mock()
@@ -64,6 +65,20 @@ class WorkflowTests(unittest.TestCase):
         self.worker.action()
         self.send("确认绑定", self.click("bind"))
         self.worker.action()
+
+    def test_service_switch_blocks_old_menu_and_rewrites_queued_reply(self):
+        self.send("hello")
+        old = self.click("educoder")
+        self.store.set_service_enabled("educoder", False, "test-admin")
+        self.send("头歌", old)
+        self.assertEqual(self.state()["phase"], "idle")
+        self.assertEqual(self.state()["actions"], {})
+        self.worker.outbox()
+        self.assertEqual(self.api.send.call_args.args[0]["text"]["content"], "暂无服务。")
+        self.assertFalse(self.service.verify.called)
+        self.store.set_service_enabled("educoder", True, "test-admin")
+        self.send("hello")
+        self.assertTrue(self.click("educoder"))
 
     def test_full_flow_plaintext_confirmed_only_and_no_duplicate_submission(self):
         self.bind()

@@ -57,7 +57,19 @@ errors retry at most three times with stable IDs.
 Admin access requires a verified ID token with `platform-admin`. State, nonce,
 PKCE S256, Secure/HttpOnly/SameSite=Lax cookies and five-minute sessions are used.
 Cookies contain no access/refresh token or customer credentials. Non-admins get
-403 without a redirect loop. The console is read-only.
+403 without a redirect loop. The console exposes per-service switches under
+`/admin`; writes require the verified admin session, same Origin and a session
+CSRF token. Service IDs/names are registered in `service_catalog.py`; enabled
+flags are persisted independently in `kf_meta` under `service:<code>` with actor
+and update time. All processes reread flags without a restart. Missing flags
+preserve the existing enabled default; deployments can seed a disabled flag first.
+
+Disabled services disappear from menus and stale clicks cannot start them. If
+all services are disabled, every customer reply is the exact text `暂无服务。`,
+including messages queued before closure. Pending credential/list jobs and new,
+unstarted purchases are cancelled; existing payments and confirmed execution are
+still reconciled/fulfilled in the background. Callback signature verification,
+SSO, health endpoints and payment webhooks retain their own protocol responses.
 
 Schema creation is additive. Back up MySQL, the bank and data-encryption key before
 deployment. Restrict access to plaintext binding passwords and backups.

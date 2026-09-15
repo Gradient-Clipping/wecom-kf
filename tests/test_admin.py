@@ -20,7 +20,8 @@ class AdminTests(unittest.TestCase):
         self.remote.authorize_redirect = AsyncMock(return_value=RedirectResponse("https://auth.lazycampus.com/"))
         self.remote.authorize_access_token = AsyncMock()
         self.app = FastAPI()
-        with patch("wecom_kf.admin.OAuth", return_value=self.oauth), patch("wecom_kf.admin.Store"):
+        with patch("wecom_kf.admin.OAuth", return_value=self.oauth), patch("wecom_kf.admin.Store") as store:
+            self.store = store.return_value
             install_admin(self.app, self.settings)
         self.client = TestClient(self.app, base_url="https://kf.lazycampus.com")
 
@@ -51,3 +52,20 @@ class AdminTests(unittest.TestCase):
         session = json.loads(base64.b64decode(value))
         self.assertEqual(set(session), {"admin"})
         self.assertNotIn("private", str(session))
+
+    def test_service_switch_requires_admin_origin_and_csrf(self):
+        import base64, json
+        from itsdangerous import TimestampSigner
+        self.assertEqual(self.client.post("/admin/services/educoder").status_code, 403)
+        session = {"admin": {"name": "operator", "until": time.time()+200}, "csrf": "known-csrf"}
+        cookie = TimestampSigner(self.settings.session_secret).sign(base64.b64encode(json.dumps(session).encode())).decode()
+        self.client.cookies.set("__Host-kf-admin", cookie)
+        url = "/admin/services/educoder"
+        self.assertEqual(self.client.post(url, data={"csrf": "known-csrf"}).status_code, 403)
+        headers = {"Origin": self.settings.public_base_url}
+        self.assertEqual(self.client.post(url, headers=headers, data={"csrf": "wrong"}).status_code, 403)
+        response = self.client.post(url, headers=headers, data={"csrf": "known-csrf"}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        self.store.set_service_enabled.assert_called_once_with("educoder", False, "operator")
+        self.client.post(url, headers=headers, data={"csrf": "known-csrf", "enabled": "1"}, follow_redirects=False)
+        self.store.set_service_enabled.assert_called_with("educoder", True, "operator")

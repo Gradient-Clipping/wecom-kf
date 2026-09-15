@@ -3,6 +3,7 @@
 import re
 import secrets
 import unicodedata
+from .service_catalog import available
 
 INVALID = "输入无效，请重新输入"
 BLOCKED = "账号验证连续失败3次，客服服务已暂停24小时，请24小时后再试。"
@@ -81,7 +82,11 @@ def menu(state, title, choices, tail="", lines=()):
 
 
 def services(state):
-    return menu(state, "请选择服务", [("1. 头歌", {"op": "educoder"})], "点击菜单或回复服务序号。")
+    choices = [(f"{i}. {item['name']}", {"op": item["code"]}) for i, item in enumerate(available(state), 1)]
+    if not choices:
+        state["actions"] = {}
+        return text("暂无服务。")
+    return menu(state, "请选择服务", choices, "点击菜单或回复服务序号。")
 
 
 def list_menu(state, page=0):
@@ -125,6 +130,14 @@ def begin_list(state):
 
 def advance(state, binding, content, menu_id="", *, entered=False, now=0, execution_enabled=True, payment_enabled=False):
     """Mutate one customer's state; return replies and at most one queued job kind."""
+    enabled = {item["code"] for item in available(state)}
+    if not enabled or (state.get("phase", "idle") != "idle" and "educoder" not in enabled):
+        if state.get("phase") not in {"running", "paying", "purchasing"}:
+            for key in ("pending", "profile", "items", "selected", "job_id"):
+                state.pop(key, None)
+            state["phase"] = "idle"
+        state["actions"] = {}
+        return [services(state)], None
     if state.get("blocked_until", 0) > now:
         return [text(BLOCKED)], None
     if state.get("blocked_until"):
@@ -164,7 +177,9 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
     if op == "home" or (not menu_id and phase != "password" and normalize(content or "") == "菜单"):
         state.update(phase="idle", pending={}, actions={})
         return [services(state)], None
-    if op == "educoder" or (phase == "idle" and normalize(content or "") in {"头歌", "1"}):
+    typed_service = next((item["code"] for i, item in enumerate(available(state), 1)
+                          if normalize(content or "") in {item["name"], str(i)}), None) if phase == "idle" else None
+    if "educoder" in enabled and (op == "educoder" or typed_service == "educoder"):
         if binding:
             return begin_list(state)
         state.update(phase="account", pending={}, actions={})
