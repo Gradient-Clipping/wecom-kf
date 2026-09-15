@@ -28,6 +28,11 @@ class Settings:
     oidc_issuer: str = "https://auth.lazycampus.com/realms/lazycampus"
     oidc_client_id: str = "lazycampus-wecom-kf"
     public_base_url: str = "https://kf.lazycampus.com"
+    payment_enabled: bool = False
+    payment_url: str = ""
+    payment_secret: str = field(default="", repr=False)
+    payment_platform: str = "educoder"
+    payment_timezone: str = "Asia/Shanghai"
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -50,4 +55,9 @@ class Settings:
             cache_dir=os.getenv("EDUCODER_CACHE_DIR", "/tmp/educoder"),
             oidc_secret=os.getenv("OIDC_CLIENT_SECRET", ""),
             session_secret=os.getenv("ADMIN_SESSION_SECRET", ""),
+            payment_enabled=os.getenv("SERVICE_PAYMENT_ENABLED", "false").lower() == "true",
+            payment_url=os.getenv("SERVICE_PAYMENT_URL", ""),
+            payment_secret=os.getenv("SERVICE_PAYMENT_SECRET", ""),
+            payment_platform=os.getenv("SERVICE_PAYMENT_PLATFORM", "educoder"),
+            payment_timezone=os.getenv("SERVICE_PAYMENT_TIMEZONE", "Asia/Shanghai"),
         )

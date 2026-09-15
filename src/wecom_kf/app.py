@@ -32,6 +32,9 @@ def create_app(settings: Settings | None = None, inbox=None) -> FastAPI:
     if settings.oidc_secret:
         from .admin import install_admin
         install_admin(app, settings)
+    if settings.payment_enabled:
+        from .payment_events import install_payment_events
+        install_payment_events(app, settings)
 
     @app.middleware("http")
     async def no_cache(request, call_next):

@@ -13,6 +13,19 @@ from .inbox import MySQLInbox
 from .history import visible_content
 
 DDL = (
+    """CREATE TABLE IF NOT EXISTS kf_purchases (
+        id CHAR(32) PRIMARY KEY, customer_id CHAR(64) NOT NULL,
+        order_id CHAR(36) UNIQUE, snapshot MEDIUMBLOB NOT NULL, document JSON,
+        status VARCHAR(24) NOT NULL, solve_job_id CHAR(32) UNIQUE,
+        updated_at DOUBLE NOT NULL, KEY polling (status,updated_at)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS kf_payment_penalties (
+        purchase_id CHAR(32) PRIMARY KEY, customer_id CHAR(64) NOT NULL,
+        business_day CHAR(10) NOT NULL, returned_at DOUBLE,
+        KEY allowance (customer_id,business_day)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS kf_payment_events (
+        id CHAR(36) PRIMARY KEY, payload JSON NOT NULL, received_at DOUBLE NOT NULL) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS kf_payment_nonces (
+        id CHAR(64) PRIMARY KEY, expires_at DOUBLE NOT NULL) ENGINE=InnoDB""",
     """CREATE TABLE IF NOT EXISTS kf_meta (
         name VARCHAR(64) PRIMARY KEY, value TEXT NOT NULL) ENGINE=InnoDB""",
     """CREATE TABLE IF NOT EXISTS kf_cursors (
@@ -117,6 +130,10 @@ class Store(MySQLInbox):
         job = uuid.uuid4().hex
         cursor.execute("INSERT INTO kf_jobs (id,customer_id,kind,payload,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s)",
                        (job, row["id"], kind, self.pack(payload), time.time(), time.time()))
+        if kind == "solve":
+            cursor.execute("UPDATE kf_jobs SET result=%s WHERE id=%s", (json.dumps({
+                "passed_homeworks": 0, "total_homeworks": len(payload["items"]), "passed_units": 0,
+                "current": "等待处理", "failures": [], "final": False}), job))
         state["job_id"] = job
         return job
 

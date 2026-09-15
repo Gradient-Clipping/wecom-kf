@@ -7,6 +7,32 @@ import unicodedata
 INVALID = "输入无效，请重新输入"
 BLOCKED = "账号验证连续失败3次，客服服务已暂停24小时，请24小时后再试。"
 PAGE_SIZE = 6
+PAYMENT_WARNING = "警告：因微信平台受限，最低支付 ¥1.00。订单码有效期为 5 分钟。请完成付款后再点击“确认付款”。"
+
+
+def queued(state, *, paid=False):
+    title = ("付款成功，正在开始处理。\n" if paid else "") + "已确认，任务已加入队列，结束后会通知你。"
+    return menu(state, title, [("查询进度", {"op": "progress"})])
+
+
+def progress_reply(state, value, status="running"):
+    value = value if isinstance(value, dict) else {}
+    labels = {"pending": "排队中", "running": "执行中", "complete": "已结束", "failed": "已结束", "interrupted": "已中断"}
+    message = f"任务进度\n\n状态：{labels.get(status, '待核对')}\n已通过实训：{value.get('passed_homeworks', 0)}/{value.get('total_homeworks', 0)}\n正在处理：{value.get('current') or '等待处理'}"
+    failures = value.get("failures") or []
+    page = max(0, min(state.get("progress_page", 0), max(0, (len(failures) - 1) // 40)))
+    choices = [("查询进度", {"op": "progress", "page": 0})]
+    lines, tail = [], ""
+    if failures:
+        message += "\n已失败/跳过关卡："
+        lines = failures[page * 40:(page + 1) * 40]
+        if state.get("purchase_id"):
+            tail = "失败/跳过的关卡会按数量自动退款；有成功关卡最低保留1元。Apple支付退款需售后处理。"
+        if page:
+            choices.append(("上一页失败关卡", {"op": "progress", "page": page - 1}))
+        if (page + 1) * 40 < len(failures):
+            choices.append(("下一页失败关卡", {"op": "progress", "page": page + 1}))
+    return menu(state, message, choices, tail, lines)
 
 
 def normalize(value):
@@ -97,23 +123,37 @@ def begin_list(state):
     return [text("正在获取未全部完成的实训，请稍候。")], "list"
 
 
-def advance(state, binding, content, menu_id="", *, entered=False, now=0, execution_enabled=True):
+def advance(state, binding, content, menu_id="", *, entered=False, now=0, execution_enabled=True, payment_enabled=False):
     """Mutate one customer's state; return replies and at most one queued job kind."""
     if state.get("blocked_until", 0) > now:
         return [text(BLOCKED)], None
     if state.get("blocked_until"):
         state.update(blocked_until=0, failures=0, phase="idle", actions={})
     phase = state.get("phase", "idle")
-    if phase != "running" and state.get("expires_at", now + 1) <= now:
+    if phase not in {"running", "paying", "purchasing"} and state.get("expires_at", now + 1) <= now:
         for key in ("pending", "profile", "items", "selected", "actions", "job_id"):
             state.pop(key, None)
         state.update(phase="idle", expires_at=now + 300)
         return [services(state)], None
     if entered:
+        if phase in {"paying", "purchasing", "running"}:
+            return [text("当前订单或任务仍在处理中，请查询付款结果或任务进度。")], None
         if phase not in {"running", "verifying", "listing"}:
             state.update(phase="idle", pending={}, selected=[], actions={})
         return [services(state)], None
-    if phase in {"running", "verifying", "listing"}:
+    if phase == "running":
+        action = state.get("actions", {}).get(menu_id) if menu_id else None
+        if (action and action.get("op") == "progress") or normalize(content or "") == "查询进度":
+            state["progress_page"] = action.get("page", 0) if action else 0
+            return [], "progress"
+        return [queued(state)], None
+    if phase in {"paying", "purchasing"}:
+        action = state.get("actions", {}).get(menu_id) if menu_id else None
+        if phase == "paying" and action and action.get("op") == "payment_check":
+            state["actions"] = {}
+            return [], "payment_check"
+        return [text("正在创建或核对订单，请稍候。")], None
+    if phase in {"verifying", "listing"}:
         msg = {"running": "任务已确认，正在排队或执行，完成后会通知你。",
                "verifying": "正在验证账号，请稍候。", "listing": "正在获取实训，请稍候。"}[phase]
         return [text(msg)], None
@@ -159,8 +199,10 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         if op == "run" and phase == "confirm":
             if not execution_enabled:
                 return [text("执行服务暂未开放，请稍后再试。")], None
-            state.update(phase="running", actions={})
-            return [text("已确认，任务已加入队列，结束后会通知你。")], "solve"
+            state.update(phase="purchasing" if payment_enabled else "running", actions={})
+            if payment_enabled:
+                return [text("正在计算未通过关卡并创建订单，请稍候。")], "purchase"
+            return [queued(state)], "solve"
         if op == "page":
             state["phase"] = "select"
             return [list_menu(state, action["page"])], None
@@ -171,7 +213,7 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         except ValueError:
             return [text(INVALID)], None
         state.update(phase="confirm", selected=indices)
-        return [confirmation(state)], None
+        return ([text(PAYMENT_WARNING)] if payment_enabled else []) + [confirmation(state)], None
     return [text(INVALID)], None
 
 

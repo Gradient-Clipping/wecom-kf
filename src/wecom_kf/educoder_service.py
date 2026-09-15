@@ -2,6 +2,7 @@
 
 from pathlib import Path
 import re
+import threading
 
 from educoder import EduCoderClient, QuestionBank, ShixunSolver, extract_course_identifier
 from educoder.exceptions import EduCoderError
@@ -64,9 +65,45 @@ class EduCoderService:
         finally:
             client.session.close()
 
+    def snapshot(self, binding, items):
+        client = self.client(binding["account"], binding["password"])
+        try:
+            if str(client.ensure_logged_in().get("login")) != binding["login_no"]:
+                raise RuntimeError("Bound identity mismatch")
+            result = []
+            for item in items:
+                info = client.shixun_homeworks.homework(item["course_identifier"], item["homework_id"]).shixun_info()
+                challenges = [{"challenge_id": int(c["challenge_id"]), "name": str(c.get("name") or ""),
+                               "position": int(c.get("position") or i + 1)}
+                              for i, c in enumerate(info.get("challenge_list") or []) if not c.get("finished")]
+                if challenges:
+                    result.append({**item, "challenges": challenges, "allow_skip": info.get("allow_skip")})
+            return result
+        finally:
+            client.session.close()
+
+    @staticmethod
+    def billing_items(snapshot):
+        """Expose homeworks as charge items; keep challenge details in the snapshot."""
+        result, seen = [], set()
+        for item in snapshot:
+            item_id = f"{item['course_identifier']}:{item['homework_id']}"
+            if item_id in seen:
+                raise ValueError("重复的实训收费项。")
+            seen.add(item_id)
+            challenges = item["challenges"]
+            if len({c["challenge_id"] for c in challenges}) != len(challenges):
+                raise ValueError("实训关卡重复，无法确认收费数量。")
+            if challenges:
+                result.append({"id": item_id, "name": item["title"],
+                               "quantity": len(challenges), "billing_attributes": {"kind": "unit"}})
+        return result
+
     def solve(self, binding, items, progress):
         client = self.client(binding["account"], binding["password"])
-        result = []
+        result = {"passed_homeworks": 0, "total_homeworks": len(items), "passed_units": 0,
+                  "current": "", "failures": [], "homeworks": [], "final": False, "unknown": False}
+        guard = threading.Lock()
         try:
             info = client.ensure_logged_in()
             if str(info.get("login")) != binding["login_no"]:
@@ -74,20 +111,47 @@ class EduCoderService:
             bank = QuestionBank(self.settings.bank_path)
             if not Path(self.settings.bank_path).is_file():
                 raise RuntimeError("Question bank not provisioned")
-            solver = ShixunSolver(client, bank, max_attempts=5, evaluation_timeout=180,
-                                  on_event=lambda event: progress(None))
+            current_item = {}
+            def on_event(event):
+                with guard:
+                    if event.get("event") == "question_ready":
+                        title = event.get("title", "")
+                        challenge = next((c for c in current_item.get("challenges", []) if c["name"] == title), {})
+                        result["current"] = f"实训：{current_item.get('title', '')} - 第{challenge.get('position', '?')}关：{title}"
+                    progress(result)
+            solver = ShixunSolver(client, bank, max_attempts=5, evaluation_timeout=180, on_event=on_event)
             for item in items:
+                current_item = item
+                result["current"] = f"实训：{item['title']}"
                 progress(None)
                 try:
                     answer = solver.solve_shixun(item["course_identifier"], item["homework_id"],
-                                                 include_completed=False, max_workers=4)
-                    result.append({"title": item["title"], "ok": bool(answer["ok"]),
+                                                 include_completed=False, max_workers=4,
+                                                 challenge_ids={c["challenge_id"] for c in item["challenges"]} if "challenges" in item else None)
+                    entries = answer.get("results", [])
+                    passed = (sum(bool(r.get("passed")) for r in entries) + answer.get("skipped_completed_count", 0)
+                              - sum(r.get("skip_reason") == "already_completed" for r in entries))
+                    if any(r.get("evaluation_uncertain") for r in entries):
+                        result["unknown"] = True
+                    result["passed_units"] += passed
+                    completed = bool(answer.get("skipped")) or (bool(entries) and all(r.get("passed") for r in entries))
+                    result["passed_homeworks"] += int(completed)
+                    result["homeworks"].append({"title": item["title"], "ok": completed,
                                    "skipped_completed": answer.get("skipped_completed_count", 0),
-                                   "passed": sum(bool(r.get("passed")) for r in answer.get("results", [])),
+                                   "passed": passed,
                                    "total": answer.get("selected_count", 0)})
+                    for i, entry in enumerate(answer.get("results", [])):
+                        if not entry.get("passed"):
+                            title = entry.get("challenge", "")
+                            challenge = next((c for c in item.get("challenges", []) if c["name"] == title), {})
+                            result["failures"].append(f"实训：{item['title']} - 第{challenge.get('position', i+1)}关：{title}")
                 except Exception:
-                    result.append({"title": item["title"], "ok": False, "reason": "upstream_or_evaluation_error"})
+                    result["unknown"] = True
+                    result["homeworks"].append({"title": item["title"], "ok": False, "reason": "upstream_or_evaluation_error"})
+                    for c in item.get("challenges", []):
+                        result["failures"].append(f"实训：{item['title']} - 第{c['position']}关：{c['name']}")
                 progress(result)
+            result.update(final=not result["unknown"], current="已结束" if not result["unknown"] else "评测结果待核对")
             return result
         finally:
             client.session.close()

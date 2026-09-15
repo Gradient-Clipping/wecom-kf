@@ -17,6 +17,7 @@ dependencies = [
   "requests>=2.31,<3",
   "authlib>=1.6,<2",
   "itsdangerous>=2.2,<3",
+  "tzdata>=2025.1",
 ]
 
 [dependency-groups]
