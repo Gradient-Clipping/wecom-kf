@@ -18,6 +18,18 @@ class DialogTests(unittest.TestCase):
         d.advance(state, None, "１", now=1)
         self.assertEqual(state["phase"], "account")
 
+    def test_human_support_menu_and_typed_zero_with_educoder_closed(self):
+        state = {"available_services": [], "human_support_enabled": True, "phase": "idle"}
+        msg = d.services(state)
+        self.assertEqual(msg["msgmenu"]["list"][0]["click"]["content"], "0. 人工客服")
+        for content, menu_id in (("０", ""), ("人工客服", action(state, "human_support"))):
+            replies, kind = d.advance(state, None, content, menu_id, now=1)
+            self.assertIsNone(kind)
+            self.assertEqual(replies[0]["text"]["content"], "请长按扫描图中二维码添加人工客服。")
+            self.assertEqual(replies[1], {"msgtype": "image", "image": {"asset": "human_service_card"}})
+        state["human_support_enabled"] = False
+        self.assertEqual(d.advance(state, None, "0", now=2)[0], [d.text("暂无服务。")])
+
     def test_normalization_and_validation(self):
         self.assertEqual(d.selection("１， ２、\n３\u200b\ufeff", 4), [0, 1, 2])
         self.assertEqual(d.selection("０", 3), [0, 1, 2])

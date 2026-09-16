@@ -64,8 +64,17 @@ flags are persisted independently in `kf_meta` under `service:<code>` with actor
 and update time. All processes reread flags without a restart. Missing flags
 preserve the existing enabled default; deployments can seed a disabled flag first.
 
+The independent `0. 人工客服` option is controlled by `human_support_enabled` in
+`kf_meta` and defaults off. It remains available when all automated services are
+closed. Selecting it sends a short instruction followed by the bundled JPEG card;
+the gateway uploads the image as temporary WeCom media for each send. Admins can
+search confirmed bindings by exact WeChat external ID, EduCoder login number or
+account, then enter the login number to remove one binding. Unbinding clears the
+conversation state and pending replies but preserves history and completed jobs.
+Active jobs or unsettled purchases must finish before unbinding.
+
 Disabled services disappear from menus and stale clicks cannot start them. If
-all services are disabled, every customer reply is the exact text `暂无服务。`,
+all automated services and human support are disabled, every customer reply is the exact text `暂无服务。`,
 including messages queued before closure. Pending credential/list jobs and new,
 unstarted purchases are cancelled; existing payments and confirmed execution are
 still reconciled/fulfilled in the background. Callback signature verification,

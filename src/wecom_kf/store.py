@@ -126,6 +126,58 @@ class Store(MySQLInbox):
             cur.execute("INSERT INTO kf_meta (name,value) VALUES (%s,%s) ON DUPLICATE KEY UPDATE value=VALUES(value)",
                         ("service:" + code, json.dumps({"enabled": enabled, "updated_at": time.time(), "actor": actor})))
 
+    def human_support_enabled(self, cursor=None):
+        if cursor is None:
+            with self.transaction() as cur:
+                return self.human_support_enabled(cur)
+        cursor.execute("SELECT value FROM kf_meta WHERE name='human_support_enabled'")
+        row = cursor.fetchone()
+        return bool(row and json.loads(row["value"]).get("enabled") is True)
+
+    def set_human_support_enabled(self, enabled, actor):
+        if not isinstance(enabled, bool):
+            raise ValueError("Invalid switch")
+        with self.transaction() as cur:
+            cur.execute("INSERT INTO kf_meta (name,value) VALUES ('human_support_enabled',%s) ON DUPLICATE KEY UPDATE value=VALUES(value)",
+                        (json.dumps({"enabled": enabled, "updated_at": time.time(), "actor": actor}),))
+
+    def bindings_for_admin(self, query=""):
+        with self.transaction() as cur:
+            if query:
+                cur.execute("""SELECT b.customer_id,b.account,b.login_no,c.external_userid,b.created_at
+                    FROM kf_bindings b JOIN kf_customers c ON c.id=b.customer_id
+                    WHERE b.login_no=%s OR b.account=%s OR c.external_userid=%s
+                    ORDER BY b.created_at DESC LIMIT 50""", (query, query, query))
+            else:
+                cur.execute("""SELECT b.customer_id,b.account,b.login_no,c.external_userid,b.created_at
+                    FROM kf_bindings b JOIN kf_customers c ON c.id=b.customer_id
+                    ORDER BY b.created_at DESC LIMIT 50""")
+            return cur.fetchall()
+
+    def unbind(self, customer_id, login_no):
+        with self.transaction() as cur:
+            cur.execute("SELECT * FROM kf_customers WHERE id=%s FOR UPDATE", (customer_id,))
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Binding not found")
+            cur.execute("SELECT login_no FROM kf_bindings WHERE customer_id=%s FOR UPDATE", (customer_id,))
+            binding = cur.fetchone()
+            if not binding or binding["login_no"] != login_no:
+                raise ValueError("Binding changed or login number mismatched")
+            cur.execute("SELECT id FROM kf_jobs WHERE customer_id=%s AND status IN ('pending','running') LIMIT 1", (customer_id,))
+            if cur.fetchone():
+                raise RuntimeError("Customer has active jobs")
+            cur.execute("SELECT id FROM kf_purchases WHERE customer_id=%s AND status IN ('CREATING','WAITING','RUNNING','SETTLING') LIMIT 1", (customer_id,))
+            if cur.fetchone():
+                raise RuntimeError("Customer has unsettled purchase")
+            cur.execute("DELETE FROM kf_bindings WHERE customer_id=%s", (customer_id,))
+            cur.execute("UPDATE kf_outbox SET status='expired' WHERE customer_id=%s AND status='pending'", (customer_id,))
+            state = self.unpack(row["state"])
+            for key in ("pending", "profile", "items", "selected", "actions", "job_id", "purchase_id", "last_result"):
+                state.pop(key, None)
+            state.update(phase="idle", expires_at=time.time() + 300)
+            self.save_customer(cur, row, state)
+
     def customer(self, cursor, external, open_kfid):
         cid = self.customer_id(external)
         cursor.execute("INSERT IGNORE INTO kf_customers (id,external_userid,open_kfid,state,updated_at) VALUES (%s,%s,%s,%s,%s)",
@@ -157,7 +209,8 @@ class Store(MySQLInbox):
     def reply(self, cursor, row, state, replies, *, welcome_code="", sent_at=None):
         now = time.time()
         state["available_services"] = [s for s in self.service_states(cursor) if s["enabled"]]
-        if replies and not state["available_services"]:
+        state["human_support_enabled"] = self.human_support_enabled(cursor)
+        if replies and not state["available_services"] and not state["human_support_enabled"]:
             state["actions"] = {}
             replies = [{"msgtype": "text", "text": {"content": "暂无服务。"}}]
         state["expires_at"] = now + 300

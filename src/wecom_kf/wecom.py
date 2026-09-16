@@ -2,6 +2,7 @@
 
 import threading
 import time
+from pathlib import Path
 
 import httpx
 
@@ -75,3 +76,25 @@ class WeCom:
 
     def send(self, payload):
         return self.call("kf/send_msg_on_event" if "code" in payload else "kf/send_msg", payload)
+
+    def upload_human_service_card(self):
+        path = Path(__file__).resolve().parents[2] / "assets" / "human_service_card.jpg"
+        for attempt in range(2):
+            token = self.token()
+            try:
+                with path.open("rb") as image:
+                    result = self._decode(self.client.post("media/upload", params={"access_token": token, "type": "image"},
+                                                            files={"media": (path.name, image, "image/jpeg",
+                                                                             {"filelength": str(path.stat().st_size)})}))
+            except httpx.HTTPError:
+                raise WeComError("media_upload_transport") from None
+            code = result.get("errcode", 0)
+            if code in {40014, 42001} and not attempt:
+                with self._lock:
+                    if self._token == token:
+                        self._expires = 0
+                continue
+            if code or not result.get("media_id"):
+                raise WeComError(code or "missing_media_id")
+            return result["media_id"]
+        raise WeComError("media_upload_refresh_exhausted")

@@ -69,3 +69,20 @@ class AdminTests(unittest.TestCase):
         self.store.set_service_enabled.assert_called_once_with("educoder", False, "operator")
         self.client.post(url, headers=headers, data={"csrf": "known-csrf", "enabled": "1"}, follow_redirects=False)
         self.store.set_service_enabled.assert_called_with("educoder", True, "operator")
+
+    def test_human_switch_and_unbind_require_admin_form(self):
+        import base64, json
+        from itsdangerous import TimestampSigner
+        session = {"admin": {"name": "operator", "until": time.time()+200}, "csrf": "known-csrf"}
+        cookie = TimestampSigner(self.settings.session_secret).sign(base64.b64encode(json.dumps(session).encode())).decode()
+        self.client.cookies.set("__Host-kf-admin", cookie)
+        headers = {"Origin": self.settings.public_base_url}
+        data = {"csrf": "known-csrf", "enabled": "1"}
+        self.assertEqual(self.client.post("/admin/human-support", data=data).status_code, 403)
+        self.assertEqual(self.client.post("/admin/human-support", headers=headers, data=data, follow_redirects=False).status_code, 303)
+        self.store.set_human_support_enabled.assert_called_once_with(True, "operator")
+        customer = "a" * 64
+        url = f"/admin/bindings/{customer}/delete"
+        self.assertEqual(self.client.post(url, headers=headers, data={"csrf": "known-csrf"}).status_code, 400)
+        self.assertEqual(self.client.post(url, headers=headers, data={"csrf": "known-csrf", "login_no": "login"}, follow_redirects=False).status_code, 303)
+        self.store.unbind.assert_called_once_with(customer, "login")

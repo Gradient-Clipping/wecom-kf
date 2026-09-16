@@ -30,6 +30,7 @@ class WorkflowTests(unittest.TestCase):
     def setUp(self):
         with self.store.transaction() as cur:
             cur.execute("DELETE FROM kf_meta WHERE name LIKE 'service:%'")
+            cur.execute("DELETE FROM kf_meta WHERE name='human_support_enabled'")
             for table in ("kf_customers", "kf_bindings", "kf_jobs", "kf_messages", "kf_outbox", "kf_cursors", "kf_message_history"):
                 cur.execute(f"DELETE FROM {table}")
         self.api, self.service = Mock(), Mock()
@@ -79,6 +80,38 @@ class WorkflowTests(unittest.TestCase):
         self.store.set_service_enabled("educoder", True, "test-admin")
         self.send("hello")
         self.assertTrue(self.click("educoder"))
+
+    def test_human_support_sends_text_then_image_and_unbinds(self):
+        self.store.set_service_enabled("educoder", False, "test-admin")
+        self.store.set_human_support_enabled(True, "test-admin")
+        self.send("hello")
+        self.assertTrue(self.click("human_support"))
+        self.send("０")
+        self.api.upload_human_service_card.return_value = "test-media"
+        for _ in range(3):
+            self.worker.outbox()
+        sent = [call.args[0] for call in self.api.send.call_args_list]
+        self.assertEqual(sent[-2]["text"]["content"], "请长按扫描图中二维码添加人工客服。")
+        self.assertEqual(sent[-1]["image"], {"media_id": "test-media"})
+        self.store.set_service_enabled("educoder", True, "test-admin")
+        self.bind()
+        cid = self.store.customer_id("customer")
+        with self.assertRaises(ValueError):
+            self.store.unbind(cid, "wrong")
+        self.store.unbind(cid, "loginno")
+        with self.store.transaction() as cur:
+            self.assertIsNone(self.store.binding(cur, cid))
+        self.assertEqual(self.state()["phase"], "idle")
+
+    def test_unbind_rejects_active_job(self):
+        self.bind()
+        self.send("1")
+        self.send("确认", self.click("run"))
+        cid = self.store.customer_id("customer")
+        with self.assertRaises(RuntimeError):
+            self.store.unbind(cid, "loginno")
+        with self.store.transaction() as cur:
+            self.assertIsNotNone(self.store.binding(cur, cid))
 
     def test_full_flow_plaintext_confirmed_only_and_no_duplicate_submission(self):
         self.bind()

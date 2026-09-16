@@ -83,6 +83,8 @@ def menu(state, title, choices, tail="", lines=()):
 
 def services(state):
     choices = [(f"{i}. {item['name']}", {"op": item["code"]}) for i, item in enumerate(available(state), 1)]
+    if state.get("human_support_enabled"):
+        choices.insert(0, ("0. 人工客服", {"op": "human_support"}))
     if not choices:
         state["actions"] = {}
         return text("暂无服务。")
@@ -131,7 +133,7 @@ def begin_list(state):
 def advance(state, binding, content, menu_id="", *, entered=False, now=0, execution_enabled=True, payment_enabled=False):
     """Mutate one customer's state; return replies and at most one queued job kind."""
     enabled = {item["code"] for item in available(state)}
-    if not enabled or (state.get("phase", "idle") != "idle" and "educoder" not in enabled):
+    if (not enabled and not state.get("human_support_enabled")) or (state.get("phase", "idle") != "idle" and "educoder" not in enabled):
         if state.get("phase") not in {"running", "paying", "purchasing"}:
             for key in ("pending", "profile", "items", "selected", "job_id"):
                 state.pop(key, None)
@@ -143,6 +145,11 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
     if state.get("blocked_until"):
         state.update(blocked_until=0, failures=0, phase="idle", actions={})
     phase = state.get("phase", "idle")
+    action = state.get("actions", {}).get(menu_id) if menu_id else None
+    if state.get("human_support_enabled") and (action and action.get("op") == "human_support" or
+                                               phase == "idle" and not menu_id and normalize(content or "") == "0"):
+        return [text("请长按扫描图中二维码添加人工客服。"),
+                {"msgtype": "image", "image": {"asset": "human_service_card"}}], None
     if phase not in {"running", "paying", "purchasing"} and state.get("expires_at", now + 1) <= now:
         for key in ("pending", "profile", "items", "selected", "actions", "job_id"):
             state.pop(key, None)

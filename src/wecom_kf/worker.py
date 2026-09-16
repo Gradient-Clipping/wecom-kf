@@ -144,6 +144,7 @@ class Worker:
                 return True
             content = message.get("text", {}) if message.get("msgtype") == "text" else {}
             state["available_services"] = [s for s in store.service_states(cur) if s["enabled"]]
+            state["human_support_enabled"] = store.human_support_enabled(cur)
             replies, kind = dialog.advance(state, binding, content.get("content"), content.get("menu_id", ""),
                                            entered=entered, now=now, execution_enabled=self.settings.execution_enabled,
                                            payment_enabled=self.settings.payment_enabled)
@@ -201,11 +202,17 @@ class Worker:
             cur.execute("SELECT * FROM kf_customers WHERE id=%s FOR UPDATE", (item["customer_id"],))
             row = cur.fetchone()
             payload = store.unpack(item["payload"])
-            if not any(s["enabled"] for s in store.service_states(cur)):
+            human_enabled = store.human_support_enabled(cur)
+            if not any(s["enabled"] for s in store.service_states(cur)) and not human_enabled:
                 payload = {key: value for key, value in payload.items() if key in {"msgid", "code", "touser", "open_kfid"}}
                 payload.update(msgtype="text", text={"content": "暂无服务。"})
                 cur.execute("UPDATE kf_outbox SET payload=%s WHERE id=%s", (store.pack(payload), item["id"]))
                 cur.execute("UPDATE kf_message_history SET message_type='text',content_text=%s WHERE outbox_id=%s", ("暂无服务。", item["id"]))
+            elif payload.get("msgtype") == "image" and payload.get("image", {}).get("asset") == "human_service_card" and not human_enabled:
+                payload = {key: value for key, value in payload.items() if key in {"msgid", "code", "touser", "open_kfid"}}
+                payload.update(msgtype="text", text={"content": "人工客服暂未开放。"})
+                cur.execute("UPDATE kf_outbox SET payload=%s WHERE id=%s", (store.pack(payload), item["id"]))
+                cur.execute("UPDATE kf_message_history SET message_type='text',content_text=%s WHERE outbox_id=%s", ("人工客服暂未开放。", item["id"]))
             if item["expires_at"] <= now or ("code" not in payload and row["reply_count"] >= 5):
                 cur.execute("UPDATE kf_outbox SET status='deferred',error_code='reply_window' WHERE id=%s", (item["id"],))
                 return True
@@ -213,15 +220,21 @@ class Worker:
                 cur.execute("UPDATE kf_customers SET reply_count=reply_count+1 WHERE id=%s", (row["id"],))
             cur.execute("UPDATE kf_outbox SET status='sending',attempts=attempts+1 WHERE id=%s", (item["id"],))
         status, error = "accepted", None
+        send_started = False
         try:
+            if payload.get("msgtype") == "image" and payload.get("image", {}).get("asset") == "human_service_card":
+                payload["image"] = {"media_id": self.api.upload_human_service_card()}
+            send_started = True
             self.api.send(payload)
         except WeComError as exc:
-            status = "unknown" if exc.uncertain else "failed"
+            status = "unknown" if send_started and exc.uncertain else "failed"
             error = str(exc.code)
-            if not exc.uncertain and exc.code in {-1, 45009} and item["attempts"] < 2:
+            if (not send_started or not exc.uncertain and exc.code in {-1, 45009}) and item["attempts"] < 3:
                 status = "pending"
         except Exception:
-            status, error = "unknown", "unexpected_transport"
+            status, error = ("unknown" if send_started else "pending"), "unexpected_transport"
+            if item["attempts"] >= 3:
+                status = "unknown" if send_started else "failed"
         with store.transaction() as cur:
             cur.execute("UPDATE kf_outbox SET status=%s,error_code=%s WHERE id=%s AND status='sending'", (status, error, item["id"]))
             if status == "pending":
