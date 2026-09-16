@@ -218,14 +218,18 @@ class ShixunSolver:
         try:
             task = client.tasks.get(game_identifier, homework_common_id=homework_id)
             path = infer_task_path(task)
-            paths = [p for p in str(task.get("challenge", {}).get("path", "")).replace(";", "\uff1b").split("\uff1b") if p.strip()]
-            if len(paths) != 1:
-                raise ValueError("Automatic solving currently requires exactly one editable file")
+            paths = [p.strip() for p in str(task.get("challenge", {}).get("path", ""))
+                     .replace(";", "\uff1b").replace("；", "\uff1b").split("\uff1b") if p.strip()]
+            if len(paths) != len(set(paths)):
+                raise ValueError("Duplicate task file paths")
             repo = str(task.get("myshixun", {}).get("identifier") or "")
             if not repo:
                 raise ValueError("Missing myshixun repository identifier")
             with self._lock_for("file", repo, path):
                 original = client.tasks.read_file(game_identifier, path, homework_common_id=homework_id)
+                reference_files = {reference: client.tasks.read_file(
+                    game_identifier, reference, homework_common_id=homework_id,
+                ) for reference in paths[1:]}
                 if folder:
                     (folder / "original.txt").write_bytes(original.encode("utf-8"))
                 content = structure_task_content(task)
@@ -244,7 +248,8 @@ class ShixunSolver:
                     if conversation is None:
                         config = self.deepseek or DeepSeekConfig.from_env()
                         conversation = self.conversation_factory(config, problem_message(
-                            title=title, stem=stem, path=path, starter_code=original, images=images,
+                            title=title, stem=stem, path=path, starter_code=original,
+                            reference_files=reference_files, images=images,
                         ))
                     return conversation
 

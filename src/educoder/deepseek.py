@@ -133,15 +133,21 @@ class DeepSeekConfig:
 
 def problem_message(
     *, title: str, stem: str, path: str, starter_code: str,
-    images: list[dict[str, Any]],
+    images: list[dict[str, Any]], reference_files: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
     """Interleave source text and actual image bytes, never authenticated URLs."""
     tokens = find_task_image_tokens(stem, strict=True)
     if len(tokens) != len(images):
         raise ValueError("All problem images must be available in source order")
+    if reference_files and (path in reference_files or any(
+        not isinstance(name, str) or not name or not isinstance(source, str)
+        for name, source in reference_files.items()
+    )):
+        raise ValueError("Reference files must be distinct, named source files")
     content: list[dict[str, Any]] = [{
         "type": "text",
-        "text": json.dumps({"title": title, "target_file": path, "starter_code": starter_code}, ensure_ascii=False),
+        "text": json.dumps({"title": title, "target_file": path, "starter_code": starter_code,
+                            "read_only_files": reference_files or {}}, ensure_ascii=False),
     }]
     cursor = 0
     for index, (token, image) in enumerate(zip(tokens, images), 1):
@@ -173,6 +179,8 @@ class DeepSeekConversation:
                 "with full_code containing the COMPLETE replacement source for the "
                 "specified target file. Plain text or code in chat is never submitted. "
                 "The tool overwrites the entire file; it cannot merge snippets or patches. "
+                "Other supplied files are read-only context, including any test scripts. "
+                "Never modify or submit them; write only the target file. "
                 "Preserve required scaffolding, function signatures and input/output format. "
                 "Include all required imports, definitions and entry-point code. "
                 "Do not omit unchanged sections, use placeholders, Markdown fences, "

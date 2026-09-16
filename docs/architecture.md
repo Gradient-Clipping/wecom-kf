@@ -92,6 +92,8 @@ Bind an account -> list unfinished shixuns (or all) -> persist a numbered snapsh
 - Re-fetch completion and permissions before execution; skip passed challenges.
 - Keep per-question full text, ordered images, starter code and the tool-call repair
   context. Only `submit_code(full_code=...)` may submit an AI answer.
+- For multi-path tasks, submit only the first (main) file. Read the other listed
+  files into AI context as read-only references; the bank stores main-file answers.
 - Pass/fail/unknown are different states. An uncertain remote build must not be
   automatically retried by queue redelivery or a restarted worker.
 - Cancellation stops future submissions; it cannot promise to cancel an already
