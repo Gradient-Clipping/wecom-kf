@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from wecom_kf import dialog
 from wecom_kf.educoder_service import EduCoderService
 from wecom_kf.payments import Payments, business_day, refundable, signature, waiting
+from wecom_kf.worker import wecom_pagepath
 
 
 class FakeStore:
@@ -162,8 +163,27 @@ class PaymentTests(unittest.TestCase):
         payments.observe("purchase", order())
         self.assertEqual(store.purchase["document"].get("manual_checks", []), [])
         payments.observe("purchase", order(), check_id="one", status="UNPAID")
+        self.assertEqual(store.replies[-1]["msgmenu"]["tail_content"], "1/5")
         payments.observe("purchase", order(), check_id="one", status="UNPAID")
         self.assertEqual(store.purchase["document"]["manual_checks"], ["one"])
+        self.assertEqual(store.replies[-1]["msgmenu"]["tail_content"], "1/5")
+        payments.observe("purchase", order(), check_id="two", status="UNPAID")
+        self.assertEqual(store.replies[-1]["msgmenu"]["tail_content"], "2/5")
+        payments.observe("purchase", order(), check_id="pending", status="UNKNOWN")
+        self.assertEqual(store.replies[-1]["msgmenu"]["tail_content"], "2/5")
+
+    def test_closed_order_notifies_once_then_shows_service_menu(self):
+        for manual in (False, True):
+            with self.subTest(manual=manual):
+                payments, store = self.setup_payment()
+                store.row["state"]["available_services"] = [{"code": "educoder", "name": "头歌", "enabled": True}]
+                payments.observe("purchase", order(code_status="EXPIRED", payment_status="CLOSED", order_version=2),
+                                 check_id="check" if manual else None, status="CLOSED" if manual else None)
+                self.assertEqual(store.replies[0]["text"]["content"], "订单已超时，请重新选择服务。")
+                self.assertEqual(store.replies[1]["msgmenu"]["head_content"], "请选择服务：")
+                self.assertEqual(store.row["state"]["phase"], "idle")
+                payments.observe("purchase", order(code_status="EXPIRED", payment_status="CLOSED", order_version=2))
+                self.assertEqual(len(store.replies), 2)
 
     def test_five_failures_debit_once_and_late_payment_returns_original_day(self):
         payments, store = self.setup_payment()
@@ -200,6 +220,15 @@ class PaymentTests(unittest.TestCase):
         self.assertEqual(waiting(state, order)["msgmenu"]["tail_content"], "0/5")
         order["manual_checks"] = ["a", "b"]
         self.assertEqual(waiting(state, order)["msgmenu"]["tail_content"], "2/5")
+
+    def test_wecom_miniprogram_pagepath_keeps_order_code(self):
+        self.assertEqual(
+            wecom_pagepath("features/pages/service-order/index?code=Ab_12-3"),
+            "features/pages/service-order/index.html?code=Ab_12-3",
+        )
+        self.assertEqual(wecom_pagepath("pages/index.html?code=x"), "pages/index.html?code=x")
+        with self.assertRaises(ValueError):
+            wecom_pagepath("https://example.com/pages/index")
 
     def test_signature_matches_node_canonical_wire_format(self):
         self.assertEqual(signature("key", "POST", "/orders", "1", "nonce", {"b": 2, "a": 1}),

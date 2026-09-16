@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
 
 from . import dialog
 from .config import Settings
@@ -23,6 +24,14 @@ from .wecom import WeCom, WeComError
 from .payments import Payments, PaymentRejected, business_day, waiting
 
 log = logging.getLogger("wecom_kf.worker")
+
+
+def wecom_pagepath(value):
+    parts = urlsplit(value)
+    if parts.scheme or parts.netloc or not parts.path:
+        raise ValueError("Invalid mini-program page path")
+    path = parts.path if parts.path.endswith(".html") else parts.path + ".html"
+    return urlunsplit(("", "", path, parts.query, parts.fragment))
 
 
 class Worker:
@@ -378,7 +387,7 @@ class Worker:
                 details = "购买明细\n\n" + "\n".join(lines)
                 details += f"\n\n总计：¥{result['amount_fen']/100:.2f}\n订单码：{result['order_code']}"
                 replies = [{"msgtype": "msgmenu", "msgmenu": {"head_content": details, "list": [
-                    {"type": "miniprogram", "miniprogram": {"appid": result["miniprogram_appid"], "pagepath": result["pagepath"], "content": "打开购买页面"}}]}}, waiting(state, result)]
+                    {"type": "miniprogram", "miniprogram": {"appid": result["miniprogram_appid"], "pagepath": wecom_pagepath(result["pagepath"]), "content": "打开购买页面"}}]}}, waiting(state, result)]
             else:
                 ok = result.get("passed_homeworks", 0) if isinstance(result, dict) else sum(bool(r.get("ok")) for r in result or [])
                 count = len(job["payload"]["items"])

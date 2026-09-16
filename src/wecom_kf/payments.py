@@ -167,14 +167,17 @@ class Payments:
                     state["actions"] = {}
                     replies = [dialog.text(f"5次查款均未支付，订单码已停用。当天剩余{remaining}次机会；已有交易仍会继续核对。")]
                 elif status == "UNPAID":
-                    replies = [dialog.text(f"尚未付款，已检查{len(checks)}/5次。"), waiting(state, order)]
+                    replies = [dialog.text(f"尚未付款，已检查{len(checks)}/5次。"),
+                               waiting(state, {**order, "manual_checks": checks})]
                 else:
-                    replies = [dialog.text("支付结果待确认，请稍后重试。\n确认后将立刻开始任务。"), waiting(state, order)]
-            if order["payment_status"] == "CLOSED" and not purchase["solve_job_id"]:
+                    replies = [dialog.text("支付结果待确认，请稍后重试。\n确认后将立刻开始任务。"),
+                               waiting(state, {**order, "manual_checks": checks})]
+            if (order["payment_status"] == "CLOSED" and not purchase["solve_job_id"]
+                    and purchase["status"] != "CLOSED"):
                 cur.execute("UPDATE kf_purchases SET status='CLOSED' WHERE id=%s", (purchase_id,))
                 if state.get("purchase_id") == purchase_id:
                     state.update(phase="idle", actions={})
-                    replies = [dialog.text("订单未付款且已结束，可重新选择服务。"), dialog.services(state)]
+                    replies = [dialog.text("订单已超时，请重新选择服务。"), dialog.services(state)]
             document.update(order)
             cur.execute("UPDATE kf_purchases SET document=%s,updated_at=%s WHERE id=%s", (json.dumps(document), time.time(), purchase_id))
             if replies:
