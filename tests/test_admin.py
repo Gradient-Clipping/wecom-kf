@@ -53,7 +53,7 @@ class AdminTests(unittest.TestCase):
         self.assertEqual(set(session), {"admin"})
         self.assertNotIn("private", str(session))
 
-    def test_service_switch_requires_admin_origin_and_csrf(self):
+    def test_service_switch_accepts_missing_origin_with_csrf(self):
         import base64, json
         from itsdangerous import TimestampSigner
         self.assertEqual(self.client.post("/admin/services/educoder").status_code, 403)
@@ -61,12 +61,17 @@ class AdminTests(unittest.TestCase):
         cookie = TimestampSigner(self.settings.session_secret).sign(base64.b64encode(json.dumps(session).encode())).decode()
         self.client.cookies.set("__Host-kf-admin", cookie)
         url = "/admin/services/educoder"
-        self.assertEqual(self.client.post(url, data={"csrf": "known-csrf"}).status_code, 403)
+        self.assertEqual(self.client.post(url, data={"csrf": "wrong"}).status_code, 403)
         headers = {"Origin": self.settings.public_base_url}
+        self.assertEqual(self.client.post(url, headers={"Origin": "https://other.example"}, data={"csrf": "known-csrf"}).status_code, 403)
         self.assertEqual(self.client.post(url, headers=headers, data={"csrf": "wrong"}).status_code, 403)
         response = self.client.post(url, headers=headers, data={"csrf": "known-csrf"}, follow_redirects=False)
         self.assertEqual(response.status_code, 303)
         self.store.set_service_enabled.assert_called_once_with("educoder", False, "operator")
+        response = self.client.post(url, data={"csrf": "known-csrf", "enabled": "1"}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
+        response = self.client.post(url, headers={"Origin": "null"}, data={"csrf": "known-csrf", "enabled": "1"}, follow_redirects=False)
+        self.assertEqual(response.status_code, 303)
         self.client.post(url, headers=headers, data={"csrf": "known-csrf", "enabled": "1"}, follow_redirects=False)
         self.store.set_service_enabled.assert_called_with("educoder", True, "operator")
 
@@ -78,9 +83,10 @@ class AdminTests(unittest.TestCase):
         self.client.cookies.set("__Host-kf-admin", cookie)
         headers = {"Origin": self.settings.public_base_url}
         data = {"csrf": "known-csrf", "enabled": "1"}
-        self.assertEqual(self.client.post("/admin/human-support", data=data).status_code, 403)
+        self.assertEqual(self.client.post("/admin/human-support", data={"csrf": "wrong"}).status_code, 403)
+        self.assertEqual(self.client.post("/admin/human-support", data=data, follow_redirects=False).status_code, 303)
         self.assertEqual(self.client.post("/admin/human-support", headers=headers, data=data, follow_redirects=False).status_code, 303)
-        self.store.set_human_support_enabled.assert_called_once_with(True, "operator")
+        self.store.set_human_support_enabled.assert_called_with(True, "operator")
         customer = "a" * 64
         url = f"/admin/bindings/{customer}/delete"
         self.assertEqual(self.client.post(url, headers=headers, data={"csrf": "known-csrf"}).status_code, 400)

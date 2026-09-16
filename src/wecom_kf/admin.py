@@ -31,7 +31,8 @@ def install_admin(app, settings):
         session = request.session.get("admin", {})
         if session.get("until", 0) <= time.time():
             return None, PlainTextResponse("Administrator access required", status_code=403)
-        if request.headers.get("origin") != settings.public_base_url.rstrip("/"):
+        origin = request.headers.get("origin")
+        if origin and origin != "null" and origin != settings.public_base_url.rstrip("/"):
             return None, PlainTextResponse("Invalid origin", status_code=403)
         body = await request.body()
         if len(body) > 4096:

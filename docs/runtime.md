@@ -58,8 +58,9 @@ Admin access requires a verified ID token with `platform-admin`. State, nonce,
 PKCE S256, Secure/HttpOnly/SameSite=Lax cookies and five-minute sessions are used.
 Cookies contain no access/refresh token or customer credentials. Non-admins get
 403 without a redirect loop. The console exposes per-service switches under
-`/admin`; writes require the verified admin session, same Origin and a session
-CSRF token. Service IDs/names are registered in `service_catalog.py`; enabled
+`/admin`; writes require the verified admin session and a session CSRF token.
+Explicit foreign Origin headers are rejected; browsers that omit Origin are
+accepted only with a valid CSRF token. Service IDs/names are registered in `service_catalog.py`; enabled
 flags are persisted independently in `kf_meta` under `service:<code>` with actor
 and update time. All processes reread flags without a restart. Missing flags
 preserve the existing enabled default; deployments can seed a disabled flag first.
