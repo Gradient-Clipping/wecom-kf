@@ -89,8 +89,6 @@ class Payments:
                 cur.execute("INSERT IGNORE INTO kf_purchases (id,customer_id,snapshot,status,updated_at) VALUES (%s,%s,%s,'CREATING',%s)",
                             (job["id"], job["customer_id"], self.store.pack(snapshot), time.time()))
         service_items = self.worker.service.billing_items(snapshot)
-        if sum(item["quantity"] for item in service_items) < 2:
-            raise ValueError("最低支付 ¥1.00，请至少选择两个未通过关卡。")
         order = self.client.request("POST", "/orders", {"platform_code": self.worker.settings.payment_platform,
             "external_order_no": job["id"], "customer_ref": job["customer_id"], "sku": "service_units",
             "selection_version": job["id"], "service_items": service_items})
@@ -204,11 +202,14 @@ class Payments:
             return
         document = json.loads(purchase["document"]) if isinstance(purchase["document"], str) else purchase["document"]
         successful = data["passed_units"]
+        service_units = document.get("service_units", document["billable_units"])
+        if not 0 <= successful <= service_units:
+            raise ValueError("Invalid fulfillment accounting")
         amount = refundable(document["amount_fen"], document["billable_units"], successful)
-        summary = f"已通过{successful}/{document['billable_units']}关"
+        summary = f"已通过{successful}/{service_units}关"
         if amount > 0:
             summary += f"，待退¥{amount/100:.2f}"
-        self.client.request("PUT", base + "/fulfillment", {"status": "SUCCEEDED" if successful == document["billable_units"] else "PARTIAL" if successful else "FAILED", "version": 4, "summary": summary + "。"})
+        self.client.request("PUT", base + "/fulfillment", {"status": "SUCCEEDED" if successful == service_units else "PARTIAL" if successful else "FAILED", "version": 4, "summary": summary + "。"})
         if amount:
             refund = self.client.request("POST", base + "/refunds", {"external_refund_no": purchase["id"] + ":result", "amount_fen": amount, "reason": "未完成关卡退款"})
             if refund["status"] not in {"SUCCEEDED", "MANUAL_REQUIRED"}:

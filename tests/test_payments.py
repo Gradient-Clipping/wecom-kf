@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from wecom_kf import dialog
 from wecom_kf.educoder_service import EduCoderService
-from wecom_kf.payments import Payments, business_day, refundable, signature, waiting
+from wecom_kf.payments import PaymentRejected, Payments, business_day, refundable, signature, waiting
 from wecom_kf.worker import wecom_pagepath
 
 
@@ -100,6 +100,8 @@ class PaymentTests(unittest.TestCase):
         requests = []
         def request(method, path, body):
             requests.append(copy.deepcopy(body))
+            if body != requests[0]:
+                raise PaymentRejected("Order selection changed")
             return order(service_items=body["service_items"], billable_units=2, amount_fen=100)
         payments.client = SimpleNamespace(request=request)
         job = {"id": "purchase", "customer_id": "customer", "payload": {"items": []}}
@@ -111,9 +113,25 @@ class PaymentTests(unittest.TestCase):
         self.assertNotIn("password", json.dumps(requests))
         self.assertNotIn("challenge_id", json.dumps(requests))
         store.purchase["snapshot"][0]["challenges"].pop()
-        with self.assertRaises(ValueError):
+        with self.assertRaises(PaymentRejected):
             payments.create(job, {})
-        self.assertEqual(len(requests), 2)
+        self.assertEqual(len(requests), 3)
+
+    def test_single_challenge_creates_one_yuan_order(self):
+        payments, store = self.setup_payment()
+        store.purchase["snapshot"] = [{"course_identifier": "course", "homework_id": "1", "title": "实训",
+                                       "challenges": [{"challenge_id": 1}]}]
+        payments.worker.service = SimpleNamespace(billing_items=EduCoderService.billing_items)
+        payments.worker.settings.payment_platform = "educoder"
+        def request(method, path, body):
+            self.assertEqual(body["service_items"][0]["quantity"], 1)
+            return order(service_items=[{**body["service_items"][0], "billable_units": 2}],
+                         service_units=1, billable_units=2, amount_fen=100)
+        payments.client = SimpleNamespace(request=request)
+        created = payments.create({"id": "purchase", "customer_id": "customer",
+                                   "payload": {"items": []}}, {})
+        self.assertEqual(created["amount_fen"], 100)
+        self.assertEqual(created["service_units"], 1)
 
     def setup_payment(self):
         store = FakeStore()
@@ -124,6 +142,8 @@ class PaymentTests(unittest.TestCase):
         return payments, store
 
     def test_minimum_retention_and_full_failure(self):
+        self.assertEqual(refundable(100, 2, 0), 100)
+        self.assertEqual(refundable(100, 2, 1), 0)
         self.assertEqual(refundable(500, 10, 0), 500)
         self.assertEqual(refundable(500, 10, 1), 400)
         self.assertEqual(refundable(500, 10, 3), 350)
@@ -155,6 +175,29 @@ class PaymentTests(unittest.TestCase):
                 calls = payments.client.request.call_args_list
                 self.assertEqual(calls[0].args[2]["summary"], expected)
                 self.assertEqual(len(calls), 2 if units == 3 else 1)
+
+    def test_single_challenge_settlement_uses_service_count(self):
+        for successful, expected_status, expected_summary, refund in [
+            (1, "SUCCEEDED", "已通过1/1关。", 0),
+            (0, "FAILED", "已通过0/1关，待退¥1.00。", 100),
+        ]:
+            with self.subTest(successful=successful):
+                payments, store = self.setup_payment()
+                payments.client = MagicMock()
+                payments.client.request.return_value = {"status": "SUCCEEDED"}
+                purchase = {"id": "purchase", "order_id": "order", "solve_job_id": "solve",
+                            "document": {"amount_fen": 100, "billable_units": 2, "service_units": 1}}
+                with patch.object(store, "transaction") as transaction:
+                    cur = transaction.return_value.__enter__.return_value
+                    cur.fetchone.return_value = {"status": "complete", "result": {
+                        "final": True, "passed_units": successful}}
+                    payments.settle(purchase)
+                calls = payments.client.request.call_args_list
+                self.assertEqual(calls[0].args[2]["status"], expected_status)
+                self.assertEqual(calls[0].args[2]["summary"], expected_summary)
+                self.assertEqual(len(calls), 2 if refund else 1)
+                if refund:
+                    self.assertEqual(calls[1].args[2]["amount_fen"], 100)
 
     def test_error_processing_duplicate_and_auto_checks_do_not_count(self):
         payments, store = self.setup_payment()

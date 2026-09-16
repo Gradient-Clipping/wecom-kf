@@ -380,7 +380,7 @@ class Worker:
             elif job["kind"] == "purchase":
                 state.update(phase="paying", purchase_id=job["id"])
                 charge_items = result.get("service_items", [])
-                lines = [f"{dialog.clip(item['name'], 72)}：¥{item['quantity'] * result['unit_price_fen'] / 100:.2f}"
+                lines = [f"{dialog.clip(item['name'], 72)}：¥{item['billable_units'] * result['unit_price_fen'] / 100:.2f}"
                          for item in charge_items[:6]]
                 if len(charge_items) > 6:
                     lines.append(f"另有 {len(charge_items) - 6} 项，请在小程序查看")
