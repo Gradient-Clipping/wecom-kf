@@ -8,5 +8,7 @@
 !src/educoder/**
 !resources/
 !resources/question_bank.sqlite
+!assets/
+!assets/human_service_card.jpg
 **/__pycache__/
 **/*.pyc
