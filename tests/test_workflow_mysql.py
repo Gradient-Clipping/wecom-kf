@@ -1,5 +1,6 @@
 """Real MySQL transactions with fake external services: never submit real work."""
 import hashlib
+import json
 import os
 import time
 import unittest
@@ -31,13 +32,15 @@ class WorkflowTests(unittest.TestCase):
         with self.store.transaction() as cur:
             cur.execute("DELETE FROM kf_meta WHERE name LIKE 'service:%'")
             cur.execute("DELETE FROM kf_meta WHERE name='human_support_enabled'")
-            for table in ("kf_customers", "kf_bindings", "kf_jobs", "kf_messages", "kf_outbox", "kf_cursors", "kf_message_history"):
+            for table in ("kf_purchases", "kf_customers", "kf_bindings", "kf_jobs", "kf_messages",
+                          "kf_outbox", "kf_cursors", "kf_message_history"):
                 cur.execute(f"DELETE FROM {table}")
         self.api, self.service = Mock(), Mock()
         self.worker = Worker(self.settings, self.store, self.api, self.service)
         self.service.verify.return_value = {"login": "loginno", "username": "user", "phone": "138****1234"}
         self.service.list_homeworks.return_value = [
-            {"title": f"实训{i}", "course_name": "课堂", "homework_id": str(i), "course_identifier": "c"} for i in range(20)]
+            {"title": f"实训{i}", "course_name": "课堂", "remaining_challenges": 2,
+             "homework_id": str(i), "course_identifier": "c"} for i in range(20)]
         self.service.solve.return_value = [{"title": "实训1", "ok": True}]
 
     def state(self, user="customer"):
@@ -66,6 +69,21 @@ class WorkflowTests(unittest.TestCase):
         self.worker.action()
         self.send("确认绑定", self.click("bind"))
         self.worker.action()
+
+    def paid_job(self, items=None, *, paid=True):
+        cid = self.store.customer_id("customer")
+        purchase_id = uuid.uuid4().hex
+        with self.store.transaction() as cur:
+            row, state = self.store.customer(cur, "customer", "testkf")
+            selected = items or [self.service.list_homeworks.return_value[0]]
+            cur.execute("INSERT INTO kf_purchases (id,customer_id,snapshot,document,status,updated_at) VALUES (%s,%s,%s,%s,'RUNNING',%s)",
+                        (purchase_id, cid, self.store.pack(selected),
+                         json.dumps({"payment_status": "PAID" if paid else "UNPAID"}), time.time()))
+            job_id = self.store.enqueue(cur, row, state, "solve", {"items": selected, "purchase_id": purchase_id})
+            cur.execute("UPDATE kf_purchases SET solve_job_id=%s WHERE id=%s", (job_id, purchase_id))
+            state.update(phase="running", purchase_id=purchase_id)
+            self.store.save_customer(cur, row, state)
+        return job_id
 
     def test_service_switch_blocks_old_menu_and_rewrites_queued_reply(self):
         self.send("hello")
@@ -105,8 +123,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_unbind_rejects_active_job(self):
         self.bind()
-        self.send("1")
-        self.send("确认", self.click("run"))
+        self.paid_job()
         cid = self.store.customer_id("customer")
         with self.assertRaises(RuntimeError):
             self.store.unbind(cid, "loginno")
@@ -121,13 +138,12 @@ class WorkflowTests(unittest.TestCase):
             cur.execute("SELECT payload FROM kf_messages")
             self.assertTrue(all(r["payload"] is None for r in cur.fetchall()))
         self.send("１、２")
-        stale = self.click("run")
+        self.assertNotIn("run", [a["op"] for a in self.state()["actions"].values()])
         self.send("３")
-        self.send("确认", stale)
+        self.send("确认")
         self.assertEqual(self.state()["phase"], "confirm")
         self.service.solve.assert_not_called()
-        mid = self.send("确认", self.click("run"))
-        self.send("确认", stale, mid=mid)
+        self.paid_job([self.service.list_homeworks.return_value[2]])
         self.worker.action(execute=True)
         self.worker.action(execute=True)
         self.service.solve.assert_called_once()
@@ -192,8 +208,7 @@ class WorkflowTests(unittest.TestCase):
 
     def test_restart_interrupts_running_job_instead_of_replaying(self):
         self.bind()
-        self.send("1")
-        self.send("确认", self.click("run"))
+        self.paid_job()
         self.store.claim(("solve",))
         self.worker.recover("executor")
         self.worker.action(execute=True)
@@ -239,10 +254,16 @@ class WorkflowTests(unittest.TestCase):
 
     def test_cleanup_keeps_active_execution(self):
         self.bind()
-        self.send("0")
-        self.send("确认", self.click("run"))
+        self.paid_job()
         with self.store.transaction() as cur:
             cur.execute("UPDATE kf_customers SET updated_at=%s", (time.time() - 600,))
         self.worker.cleanup()
         self.assertEqual(self.state()["phase"], "running")
         self.assertIsNotNone(self.store.claim(("solve",)))
+
+    def test_unpaid_job_is_cancelled_without_submitting(self):
+        self.bind()
+        self.paid_job(paid=False)
+        self.worker.action(execute=True)
+        self.service.solve.assert_not_called()
+        self.assertEqual(self.state()["phase"], "idle")

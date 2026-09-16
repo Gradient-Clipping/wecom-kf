@@ -8,31 +8,40 @@ from .service_catalog import available
 INVALID = "输入无效，请重新输入"
 BLOCKED = "账号验证连续失败3次，客服服务已暂停24小时，请24小时后再试。"
 PAGE_SIZE = 6
-PAYMENT_WARNING = "警告：因微信平台受限，最低支付 ¥1.00。订单码有效期为 5 分钟。请完成付款后再点击“确认付款”。"
+PROGRESS_LIMIT = 20
+FAILURE_PAGE_SIZE = 6
+PAYMENT_WARNING = "付款提示\n\n因微信限制，最低支付 ¥1.00，有效期 5 分钟。\n完成付款后，再点击“我已付款，查询到账”。"
 
 
 def queued(state, *, paid=False):
-    title = ("付款成功，正在开始处理。\n" if paid else "") + "已确认，任务已加入队列，结束后会通知你。"
-    return menu(state, title, [("查询进度", {"op": "progress"})])
+    title = ("付款成功，正在开始处理。\n\n" if paid else "") + "已确认，任务已加入队列。\n结束后会通知你。"
+    return menu(state, title, [("查询当前进度", {"op": "progress"})],
+                f"（{state.get('progress_checks', 0)}/{PROGRESS_LIMIT}）")
 
 
 def progress_reply(state, value, status="running"):
     value = value if isinstance(value, dict) else {}
     labels = {"pending": "排队中", "running": "执行中", "complete": "已结束", "failed": "已结束", "interrupted": "已中断"}
-    message = f"任务进度\n\n状态：{labels.get(status, '待核对')}\n已通过实训：{value.get('passed_homeworks', 0)}/{value.get('total_homeworks', 0)}\n正在处理：{value.get('current') or '等待处理'}"
+    active = status in {"pending", "running"}
+    remaining = max(0, PROGRESS_LIMIT - state.get("progress_checks", 0))
+    message = (f"任务进度\n\n状态：{labels.get(status, '待核对')}\n"
+               f"已通过实训：{value.get('passed_homeworks', 0)}/{value.get('total_homeworks', 0)}\n\n"
+               f"正在处理：\n{value.get('current') or '等待处理'}")
     failures = value.get("failures") or []
-    page = max(0, min(state.get("progress_page", 0), max(0, (len(failures) - 1) // 40)))
-    choices = [("查询进度", {"op": "progress", "page": 0})]
+    page = max(0, min(state.get("progress_page", 0), max(0, (len(failures) - 1) // FAILURE_PAGE_SIZE)))
+    choices = [("再次查询进度", {"op": "progress", "page": 0})] if not active or remaining else []
     lines, tail = [], ""
     if failures:
-        message += "\n已失败/跳过关卡："
-        lines = failures[page * 40:(page + 1) * 40]
+        message += f"\n\n已失败/跳过关卡（第{page + 1}页）："
+        lines = failures[page * FAILURE_PAGE_SIZE:(page + 1) * FAILURE_PAGE_SIZE]
         if state.get("purchase_id"):
-            tail = "失败/跳过的关卡会按数量自动退款；有成功关卡最低保留1元。Apple支付退款需售后处理。"
+            tail = "失败/跳过的关卡会按数量自动退款。Apple支付退款需售后处理。"
         if page:
-            choices.append(("上一页失败关卡", {"op": "progress", "page": page - 1}))
-        if (page + 1) * 40 < len(failures):
-            choices.append(("下一页失败关卡", {"op": "progress", "page": page + 1}))
+            choices.append(("上一页失败关卡", {"op": "progress_page", "page": page - 1}))
+        if (page + 1) * FAILURE_PAGE_SIZE < len(failures):
+            choices.append(("下一页失败关卡", {"op": "progress_page", "page": page + 1}))
+    if active:
+        tail = (tail + "\n" if tail else "") + f"（{state.get('progress_checks', 0)}/{PROGRESS_LIMIT}）"
     return menu(state, message, choices, tail, lines)
 
 
@@ -70,12 +79,11 @@ def text(value):
 def menu(state, title, choices, tail="", lines=()):
     # Store opaque menu actions with the customer, never trust a client-supplied index.
     state["actions"] = {}
-    entries = []
+    entries = [{"type": "text", "text": {"content": clip(line, 256)}} for line in lines]
     for label, action in choices:
         key = secrets.token_hex(16)
         state["actions"][key] = action
         entries.append({"type": "click", "click": {"id": key, "content": clip(label, 128)}})
-    entries += [{"type": "text", "text": {"content": clip(line, 256)}} for line in lines]
     assert len(choices) <= 10 and len(entries) <= 50
     return {"msgtype": "msgmenu", "msgmenu": {
         "head_content": clip(title, 1024), "list": entries, "tail_content": clip(tail, 1024)}}
@@ -88,7 +96,7 @@ def services(state):
     if not choices:
         state["actions"] = {}
         return text("暂无服务。")
-    return menu(state, "请选择服务", choices, "点击菜单或回复服务序号。")
+    return menu(state, "请选择服务：", choices, "也可回复上面的序号。")
 
 
 def list_menu(state, page=0):
@@ -99,14 +107,14 @@ def list_menu(state, page=0):
     start = page * PAGE_SIZE
     choices = [(f"{i + 1}. {item['title']}", {"op": "pick", "value": str(i + 1)})
                for i, item in enumerate(items[start:start + PAGE_SIZE], start)]
-    choices.append(("0. 全部实训", {"op": "pick", "value": "0"}))
+    choices.append(("\n0. 选择全部实训", {"op": "pick", "value": "0"}))
     if page:
         choices.append(("上一页", {"op": "page", "page": page - 1}))
     if page + 1 < pages:
         choices.append(("下一页", {"op": "page", "page": page + 1}))
-    choices.append(("返回服务菜单", {"op": "home"}))
-    return menu(state, f"未全部完成的实训：共{len(items)}个，第{page + 1}/{pages}页", choices,
-                "点击单个实训，或输入序号（如1,2、3）；0代表全部。可跨页输入序号。")
+    choices.append(("\n返回服务菜单", {"op": "home"}))
+    return menu(state, f"未全部完成的实训\n共 {len(items)} 个 · 第 {page + 1}/{pages} 页", choices,
+                "单选可点击；多选请回复序号，如 1,2、3。\n回复 0 选择全部，可跨页输入序号。")
 
 
 def confirmation(state, page=0):
@@ -115,14 +123,18 @@ def confirmation(state, page=0):
     if page < 0 or page >= pages:
         return text(INVALID)
     shown = selected[page * PAGE_SIZE:(page + 1) * PAGE_SIZE]
-    lines = [f"{i + 1}. {state['items'][i]['title']}（{state['items'][i]['course_name']}）" for i in shown]
-    choices = [("确认开始", {"op": "run"}), ("返回实训列表", {"op": "page", "page": 0})]
+    lines = [f"{i + 1}. {clip(state['items'][i]['title'], 180)}（待做 {state['items'][i]['remaining_challenges']} 关）" for i in shown]
+    choices = [("返回实训列表", {"op": "page", "page": 0})]
     if page:
         choices.append(("上一页已选", {"op": "selected_page", "page": page - 1}))
     if page + 1 < pages:
         choices.append(("下一页已选", {"op": "selected_page", "page": page + 1}))
-    return menu(state, f"已选{len(selected)}个实训，请核对后确认（第{page + 1}/{pages}页）", choices,
-                "若有误可以直接重新输入序号重选。", lines)
+    if state.get("payment_ready"):
+        choices.append(("确认选择并创建订单", {"op": "run"}))
+    tail = "有误可直接回复序号重选。"
+    if not state.get("payment_ready"):
+        tail += "\n支付服务暂未开放，当前不能开始任务。"
+    return menu(state, f"已选 {len(selected)} 个实训\n请核对（第 {page + 1}/{pages} 页）：", choices, tail, lines)
 
 
 def begin_list(state):
@@ -163,7 +175,10 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         return [services(state)], None
     if phase == "running":
         action = state.get("actions", {}).get(menu_id) if menu_id else None
-        if (action and action.get("op") == "progress") or normalize(content or "") == "查询进度":
+        if action and action.get("op") == "progress_page":
+            state["progress_page"] = action["page"]
+            return [], "progress_page"
+        if (action and action.get("op") == "progress") or normalize(content or "") in {"查询进度", "查询当前进度"}:
             state["progress_page"] = action.get("page", 0) if action else 0
             return [], "progress"
         return [queued(state)], None
@@ -218,13 +233,14 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
             return [text("未绑定，请重新输入头歌账号。")], None
         return [text(INVALID)], None
     if phase in {"select", "confirm"}:
+        state["payment_ready"] = payment_enabled
         if op == "run" and phase == "confirm":
             if not execution_enabled:
                 return [text("执行服务暂未开放，请稍后再试。")], None
-            state.update(phase="purchasing" if payment_enabled else "running", actions={})
-            if payment_enabled:
-                return [text("正在计算未通过关卡并创建订单，请稍候。")], "purchase"
-            return [queued(state)], "solve"
+            if not payment_enabled:
+                return [text("支付服务暂未开放，当前不能开始任务。")], None
+            state.update(phase="purchasing", actions={})
+            return [text("正在核对待做关卡并创建订单，请稍候。")], "purchase"
         if op == "page":
             state["phase"] = "select"
             return [list_menu(state, action["page"])], None
@@ -252,8 +268,9 @@ def verified(state, profile, *, invalid=False, unavailable=False, now=0):
         return [text("头歌暂时无法验证（网络、验证码或服务异常），请稍后重试。")]
     state.update(phase="bind", failures=0, blocked_until=0, profile=profile)
     label = f"验证成功\n登录号：{profile['login']}\n用户名：{profile['username']}\n手机号：{profile['phone']}"
-    return [menu(state, label, [("确认绑定", {"op": "bind"}), ("重新输入账号", {"op": "cancel_bind"})],
-                 "确认后此微信将绑定该账号，后续不可更改。")]
+    return [menu(state, label, [("重新输入账号", {"op": "cancel_bind"}),
+                               ("核对无误，确认绑定", {"op": "bind"})],
+                 "请核对登录号。确认后此微信将绑定该账号，后续不可更改。")]
 
 
 def listed(state, items, *, failed=False):

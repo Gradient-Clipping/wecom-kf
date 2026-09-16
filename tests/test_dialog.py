@@ -7,7 +7,8 @@ def action(state, op):
 
 
 def items(count):
-    return [{"title": f"实训{i}" * 40, "course_name": "课堂", "homework_id": str(i), "course_identifier": "course"} for i in range(count)]
+    return [{"title": f"实训{i}" * 40, "course_name": "课堂", "remaining_challenges": i + 1,
+             "homework_id": str(i), "course_identifier": "course"} for i in range(count)]
 
 
 class DialogTests(unittest.TestCase):
@@ -76,16 +77,19 @@ class DialogTests(unittest.TestCase):
         d.verified(state, {"login": "login", "username": "user", "phone": "138****1234"})
         self.assertEqual(d.advance(state, None, "确认绑定", action(state, "bind"), now=1)[1], "bind_and_list")
         d.listed(state, items(30))
-        self.assertIsNone(d.advance(state, True, "1、9", now=1)[1])
+        self.assertIsNone(d.advance(state, True, "1、9", now=1, payment_enabled=True)[1])
         old = action(state, "run")
-        d.advance(state, True, "２，４", now=1)
+        d.advance(state, True, "２，４", now=1, payment_enabled=True)
         self.assertEqual(state["selected"], [1, 3])
         self.assertEqual(d.advance(state, True, "确认开始", old, now=1)[0], [d.text(d.INVALID)])
-        self.assertEqual(d.advance(state, True, "确认开始", action(state, "run"), now=1)[1], "solve")
+        self.assertIsNone(d.advance(state, True, "确认开始", old, now=1)[1])
+        self.assertEqual(d.advance(state, True, "确认购买", action(state, "run"), now=1,
+                                   payment_enabled=True)[1], "purchase")
         self.assertIsNone(d.advance(state, True, "确认开始", old, now=1)[1])
 
     def test_five_minutes_latest_reply_and_running_exception(self):
-        state = {"phase": "confirm", "selected": [0], "items": items(2), "expires_at": 301}
+        state = {"phase": "confirm", "selected": [0], "items": items(2), "expires_at": 301,
+                 "payment_ready": True}
         d.confirmation(state)
         old = action(state, "run")
         self.assertIsNone(d.advance(state, True, "确认", old, now=301)[1])
@@ -106,14 +110,46 @@ class DialogTests(unittest.TestCase):
                 a = state["actions"][entry["click"]["id"]]
                 if a["op"] == "pick":
                     seen.add(a["value"])
+                    if a["value"] == "0":
+                        self.assertEqual(entry["click"]["content"], "\n0. 选择全部实训")
+                if a["op"] == "home":
+                    self.assertEqual(entry["click"]["content"], "\n返回服务菜单")
         self.assertEqual(seen, {str(n) for n in range(32)})
 
     def test_bound_user_skips_credentials_and_disabled_execution(self):
         state = {"phase": "idle"}
         self.assertEqual(d.advance(state, {"account": "one"}, "头歌")[1], "list")
         d.listed(state, items(2))
-        d.advance(state, True, "0")
-        self.assertIsNone(d.advance(state, True, "start", action(state, "run"), execution_enabled=False)[1])
+        d.advance(state, True, "0", payment_enabled=True)
+        self.assertIsNone(d.advance(state, True, "start", action(state, "run"),
+                                    execution_enabled=False, payment_enabled=True)[1])
+
+    def test_confirmation_shows_remaining_challenges_and_never_executes_free(self):
+        state = {"items": items(2), "selected": [1], "phase": "confirm"}
+        msg = d.confirmation(state)
+        self.assertIn("待做 2 关", msg["msgmenu"]["list"][0]["text"]["content"])
+        self.assertNotIn("run", [a["op"] for a in state["actions"].values()])
+        state["actions"]["old"] = {"op": "run"}
+        self.assertIsNone(d.advance(state, True, "", "old", payment_enabled=False)[1])
+        self.assertEqual(state["phase"], "confirm")
+
+    def test_progress_limit_and_failure_pages(self):
+        state = {"phase": "running", "progress_checks": 20, "progress_page": 0}
+        failures = [f"第{i}关" for i in range(17)]
+        msg = d.progress_reply(state, {"failures": failures}, "running")
+        self.assertEqual(len([e for e in msg["msgmenu"]["list"] if e["type"] == "text"]), 6)
+        self.assertNotIn("progress", [a["op"] for a in state["actions"].values()])
+        page = action(state, "progress_page")
+        self.assertEqual(d.advance(state, True, "", page)[1], "progress_page")
+
+    def test_concise_payment_and_progress_copy(self):
+        self.assertIn("因微信限制，最低支付 ¥1.00，有效期 5 分钟。", d.PAYMENT_WARNING)
+        state = {"phase": "running", "progress_checks": 0}
+        self.assertEqual(d.queued(state)["msgmenu"]["tail_content"], "（0/20）")
+        state["progress_checks"] = 3
+        reply = d.progress_reply(state, {"failures": ["第1关"]}, "running")["msgmenu"]
+        self.assertIn("（3/20）", reply["tail_content"])
+        self.assertNotIn("最低保留1元", reply["tail_content"])
 
     def test_foreign_menu_id_rejected(self):
         a, b = {}, {}

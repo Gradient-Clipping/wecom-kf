@@ -34,6 +34,10 @@ class Settings:
     payment_platform: str = "educoder"
     payment_timezone: str = "Asia/Shanghai"
 
+    @property
+    def payment_ready(self) -> bool:
+        return self.payment_enabled and self.payment_url.startswith("https://") and bool(self.payment_secret)
+
     @classmethod
     def from_env(cls) -> "Settings":
         return cls(

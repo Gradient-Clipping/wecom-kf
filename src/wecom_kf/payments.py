@@ -63,8 +63,10 @@ class PaymentClient:
 
 
 def waiting(state, order):
-    return dialog.menu(state, "等待付款。若已付款，请点击‘确认付款’。",
-                       [("确认付款", {"op": "payment_check", "order": order["order_id"], "code_version": order["code_version"]})])
+    checks = len(order.get("manual_checks", []))
+    return dialog.menu(state, "等待付款\n\n完成支付后，再点击下方按钮查询结果。",
+                       [("我已付款，查询到账", {"op": "payment_check", "order": order["order_id"], "code_version": order["code_version"]})],
+                       f"{checks}/5")
 
 
 class Payments:

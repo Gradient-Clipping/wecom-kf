@@ -200,6 +200,9 @@ class Store(MySQLInbox):
         cursor.execute("INSERT INTO kf_jobs (id,customer_id,kind,payload,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s)",
                        (job, row["id"], kind, self.pack(payload), time.time(), time.time()))
         if kind == "solve":
+            state["progress_checks"] = 0
+            state["progress_page"] = 0
+            state.pop("progress_snapshot", None)
             cursor.execute("UPDATE kf_jobs SET result=%s WHERE id=%s", (json.dumps({
                 "passed_homeworks": 0, "total_homeworks": len(payload["items"]), "passed_units": 0,
                 "current": "等待处理", "failures": [], "final": False}), job))

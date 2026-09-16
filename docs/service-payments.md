@@ -60,6 +60,8 @@ Final refund: zero successes refunds the full amount; otherwise retain
 The same external refund number survives retries. Apple refunds remain a manual
 after-sales action. Interrupted execution remains unresolved pending review.
 
-`SERVICE_PAYMENT_ENABLED=false` preserves the pre-existing free execution flow;
-it is the safe installation default, not an active production billing setup.
+When payment is disabled or its HTTPS URL/secret is missing, the customer can
+review a selection but cannot start execution. A paid order is required before
+the solver accepts a job. This is the safe installation default; enabling the
+payment flow also requires a configured, deployed payment backend.
 Tests simulate payment and task state; no real charge is made during tests.

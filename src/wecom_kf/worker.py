@@ -147,12 +147,24 @@ class Worker:
             state["human_support_enabled"] = store.human_support_enabled(cur)
             replies, kind = dialog.advance(state, binding, content.get("content"), content.get("menu_id", ""),
                                            entered=entered, now=now, execution_enabled=self.settings.execution_enabled,
-                                           payment_enabled=self.settings.payment_enabled)
-            if kind == "progress":
-                cur.execute("SELECT status,result FROM kf_jobs WHERE id=%s", (state.get("job_id"),))
-                job = cur.fetchone()
-                value = json.loads(job["result"]) if job and isinstance(job["result"], str) else (job or {}).get("result")
-                replies = [dialog.progress_reply(state, value, job["status"] if job else "unknown")]
+                                           payment_enabled=self.settings.payment_ready)
+            if kind in {"progress", "progress_page"}:
+                snapshot = state.get("progress_snapshot") if kind == "progress_page" else None
+                if snapshot:
+                    replies = [dialog.progress_reply(state, snapshot["value"], snapshot["status"])]
+                else:
+                    cur.execute("SELECT status,result FROM kf_jobs WHERE id=%s", (state.get("job_id"),))
+                    job = cur.fetchone()
+                    active = job and job["status"] in {"pending", "running"}
+                    if active and state.get("progress_checks", 0) >= dialog.PROGRESS_LIMIT:
+                        replies = [dialog.text("任务完成前的 20 次进度查询已用完。\n任务结束后会主动通知你。")]
+                    else:
+                        if active:
+                            state["progress_checks"] = state.get("progress_checks", 0) + 1
+                        value = json.loads(job["result"]) if job and isinstance(job["result"], str) else (job or {}).get("result")
+                        status = job["status"] if job else "unknown"
+                        state["progress_snapshot"] = {"value": value, "status": status}
+                        replies = [dialog.progress_reply(state, value, status)]
                 kind = None
             if kind == "purchase":
                 day = business_day(now, self.settings.payment_timezone)
@@ -262,6 +274,18 @@ class Worker:
             state = store.unpack(row["state"])
             binding = store.binding(cur, row["id"])
             obsolete = state.get("job_id") != job["id"] or (job["kind"] in {"verify", "list"} and state.get("expires_at", 0) <= time.time())
+            if job["kind"] == "solve":
+                purchase_id = job["payload"].get("purchase_id")
+                cur.execute("SELECT document,solve_job_id FROM kf_purchases WHERE id=%s", (purchase_id,))
+                purchase = cur.fetchone()
+                order = json.loads(purchase["document"]) if purchase and isinstance(purchase["document"], str) else (purchase["document"] if purchase else {})
+                if not purchase or purchase["solve_job_id"] != job["id"] or order.get("payment_status") != "PAID":
+                    obsolete = True
+                    if state.get("job_id") == job["id"]:
+                        state.update(phase="idle", actions={})
+                        state.pop("job_id", None)
+                        store.reply(cur, row, state, [dialog.text("订单尚未确认付款，任务未启动。")])
+                        store.save_customer(cur, row, state)
             state["available_services"] = [s for s in store.service_states(cur) if s["enabled"]]
             closed = not any(s["code"] == "educoder" for s in state["available_services"])
             new_purchase = False
@@ -346,7 +370,13 @@ class Worker:
                 replies = dialog.listed(state, result, failed=failed)
             elif job["kind"] == "purchase":
                 state.update(phase="paying", purchase_id=job["id"])
-                details = f"购买{result['billable_units']}个计费单位，单价¥0.50，合计¥{result['amount_fen']/100:.2f}。\n订单码：{result['order_code']}"
+                charge_items = result.get("service_items", [])
+                lines = [f"{dialog.clip(item['name'], 72)}：¥{item['quantity'] * result['unit_price_fen'] / 100:.2f}"
+                         for item in charge_items[:6]]
+                if len(charge_items) > 6:
+                    lines.append(f"另有 {len(charge_items) - 6} 项，请在小程序查看")
+                details = "购买明细\n\n" + "\n".join(lines)
+                details += f"\n\n总计：¥{result['amount_fen']/100:.2f}\n订单码：{result['order_code']}"
                 replies = [{"msgtype": "msgmenu", "msgmenu": {"head_content": details, "list": [
                     {"type": "miniprogram", "miniprogram": {"appid": result["miniprogram_appid"], "pagepath": result["pagepath"], "content": "打开购买页面"}}]}}, waiting(state, result)]
             else:

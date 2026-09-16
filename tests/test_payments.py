@@ -8,7 +8,7 @@ from unittest.mock import MagicMock, patch
 
 from wecom_kf import dialog
 from wecom_kf.educoder_service import EduCoderService
-from wecom_kf.payments import Payments, business_day, refundable, signature
+from wecom_kf.payments import Payments, business_day, refundable, signature, waiting
 
 
 class FakeStore:
@@ -193,6 +193,13 @@ class PaymentTests(unittest.TestCase):
         message = dialog.queued(state)
         key = message["msgmenu"]["list"][0]["click"]["id"]
         self.assertEqual(dialog.advance(state, True, "", key)[1], "progress")
+
+    def test_waiting_shows_compact_check_count(self):
+        state = {}
+        order = {"order_id": "order", "code_version": 1, "manual_checks": []}
+        self.assertEqual(waiting(state, order)["msgmenu"]["tail_content"], "0/5")
+        order["manual_checks"] = ["a", "b"]
+        self.assertEqual(waiting(state, order)["msgmenu"]["tail_content"], "2/5")
 
     def test_signature_matches_node_canonical_wire_format(self):
         self.assertEqual(signature("key", "POST", "/orders", "1", "nonce", {"b": 2, "a": 1}),

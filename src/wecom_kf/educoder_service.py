@@ -58,9 +58,18 @@ class EduCoderService:
                     if not hid or (cid, hid) in seen:
                         continue
                     seen.add((cid, hid))
+                    total = item.get("challenge_count")
+                    finished = item.get("finished_challenge_count")
+                    if total is None or finished is None:
+                        detail = client.shixun_homeworks.homework(cid, hid).shixun_info()
+                        challenges = detail.get("challenge_list") or []
+                        remaining = sum(not c.get("finished") for c in challenges)
+                    else:
+                        remaining = max(0, int(total) - int(finished))
                     result.append({"course_identifier": str(cid), "homework_id": hid,
                                    "course_name": str(course.get("name") or course.get("course_name") or cid),
-                                   "title": str(item.get("name") or item.get("shixun_name") or hid)})
+                                   "title": str(item.get("name") or item.get("shixun_name") or hid),
+                                   "remaining_challenges": remaining})
             return result
         finally:
             client.session.close()
@@ -116,8 +125,7 @@ class EduCoderService:
                 with guard:
                     if event.get("event") == "question_ready":
                         title = event.get("title", "")
-                        challenge = next((c for c in current_item.get("challenges", []) if c["name"] == title), {})
-                        result["current"] = f"实训：{current_item.get('title', '')} - 第{challenge.get('position', '?')}关：{title}"
+                        result["current"] = f"实训：{current_item.get('title', '')}\n第{event['position']}关：{title}"
                     progress(result)
             solver = ShixunSolver(client, bank, max_attempts=5, evaluation_timeout=180, on_event=on_event)
             for item in items:
@@ -140,16 +148,15 @@ class EduCoderService:
                                    "skipped_completed": answer.get("skipped_completed_count", 0),
                                    "passed": passed,
                                    "total": answer.get("selected_count", 0)})
-                    for i, entry in enumerate(answer.get("results", [])):
+                    for entry in answer.get("results", []):
                         if not entry.get("passed"):
                             title = entry.get("challenge", "")
-                            challenge = next((c for c in item.get("challenges", []) if c["name"] == title), {})
-                            result["failures"].append(f"实训：{item['title']} - 第{challenge.get('position', i+1)}关：{title}")
+                            result["failures"].append(f"实训：{item['title']}\n第{entry['position']}关：{title}")
                 except Exception:
                     result["unknown"] = True
                     result["homeworks"].append({"title": item["title"], "ok": False, "reason": "upstream_or_evaluation_error"})
                     for c in item.get("challenges", []):
-                        result["failures"].append(f"实训：{item['title']} - 第{c['position']}关：{c['name']}")
+                        result["failures"].append(f"实训：{item['title']}\n第{c['position']}关：{c['name']}")
                 progress(result)
             result.update(final=not result["unknown"], current="已结束" if not result["unknown"] else "评测结果待核对")
             return result

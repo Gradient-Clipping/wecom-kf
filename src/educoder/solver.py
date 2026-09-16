@@ -195,7 +195,7 @@ class ShixunSolver:
 
     def solve_challenge(
         self, game_identifier: str, *, homework_id: str | int,
-        shixun_title: str, allow_skip: bool,
+        shixun_title: str, allow_skip: bool, position: int | None = None,
     ) -> dict[str, Any]:
         if type(allow_skip) is not bool:
             raise ValueError("An explicit server skip policy is required")
@@ -203,7 +203,7 @@ class ShixunSolver:
         result: dict[str, Any] = {
             "game": game_identifier, "homework_id": str(homework_id),
             "shixun_title": shixun_title, "allow_skip": allow_skip,
-            "passed": False, "attempts": [], "bank_saved": False,
+            "position": position, "passed": False, "attempts": [], "bank_saved": False,
         }
         conversation = None
         pending_call = None
@@ -236,7 +236,7 @@ class ShixunSolver:
                 matched = self.bank.match(stem, images=images)
                 result["matched"] = matched is not None
                 result["image_count"] = len(images)
-                self._emit("question_ready", game=game_identifier, title=title,
+                self._emit("question_ready", game=game_identifier, title=title, position=position,
                            bank_match=matched is not None, images=len(images))
 
                 def context() -> Any:
@@ -396,11 +396,12 @@ class ShixunSolver:
             def solve(challenge: dict[str, Any]) -> dict[str, Any]:
                 if not include_completed and challenge.get("finished"):
                     return {"challenge": challenge.get("name"), "passed": True,
-                            "skipped": True, "skip_reason": "already_completed", "attempts": []}
+                            "position": challenge["position"], "skipped": True, "skip_reason": "already_completed", "attempts": []}
                 game = challenge.get("game_identifier")
                 if not game:
-                    return {"challenge": challenge.get("name"), "passed": False, "error": "challenge_locked", "attempts": []}
-                return self.solve_challenge(game, homework_id=homework_id, shixun_title=title, allow_skip=allow_skip)
+                    return {"challenge": challenge.get("name"), "position": challenge["position"], "passed": False, "error": "challenge_locked", "attempts": []}
+                return self.solve_challenge(game, homework_id=homework_id, shixun_title=title,
+                                            allow_skip=allow_skip, position=int(challenge["position"]))
 
             self._emit("start_shixun", homework_id=str(homework_id), title=title, allow_skip=allow_skip, selected=len(selected))
             if allow_skip:
@@ -421,7 +422,8 @@ class ShixunSolver:
                     if not result["passed"]:
                         for remaining in selected[index + 1:]:
                             results.append({"challenge": remaining.get("name"), "passed": False,
-                                            "skipped": True, "error": "previous_challenge_failed", "attempts": []})
+                                            "position": remaining["position"], "skipped": True,
+                                            "error": "previous_challenge_failed", "attempts": []})
                         break
             already_completed = bool(eligible) and skipped_completed_count == len(eligible)
             return {
