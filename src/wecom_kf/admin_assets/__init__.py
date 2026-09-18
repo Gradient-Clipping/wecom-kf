@@ -1,0 +1,1 @@
+"""Packaged administrator console assets."""

@@ -11,7 +11,7 @@ from pymysql.cursors import DictCursor
 
 from .inbox import MySQLInbox
 from .history import visible_content
-from .service_catalog import SERVICES
+from .service_catalog import SERVICES, SERVICE_DEFAULTS
 
 DDL = (
     """CREATE TABLE IF NOT EXISTS kf_purchases (
@@ -55,6 +55,11 @@ DDL = (
         status VARCHAR(24) NOT NULL DEFAULT 'pending', payload MEDIUMBLOB,
         result JSON, created_at DOUBLE NOT NULL, updated_at DOUBLE NOT NULL,
         KEY pending (kind,status,created_at), KEY customer (customer_id,status)) ENGINE=InnoDB""",
+    """CREATE TABLE IF NOT EXISTS kf_job_context (
+        job_id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin PRIMARY KEY,
+        service VARCHAR(32), account VARCHAR(256), login_no VARCHAR(128),
+        created_at DOUBLE NOT NULL, KEY account_lookup (account),
+        KEY login_lookup (login_no)) ENGINE=InnoDB""",
     """CREATE TABLE IF NOT EXISTS kf_outbox (
         seq BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
         id CHAR(32) CHARACTER SET ascii COLLATE ascii_bin NOT NULL UNIQUE,
@@ -116,7 +121,7 @@ class Store(MySQLInbox):
                 return self.service_states(cur)
         cursor.execute("SELECT name,value FROM kf_meta WHERE name LIKE 'service:%'")
         flags = {row["name"][8:]: json.loads(row["value"]) for row in cursor.fetchall()}
-        return [{"code": code, "name": name, "enabled": flags.get(code, {}).get("enabled", True) is True}
+        return [{"code": code, "name": name, "enabled": flags.get(code, {}).get("enabled", SERVICE_DEFAULTS.get(code, False)) is True}
                 for code, name in SERVICES.items()]
 
     def set_service_enabled(self, code, enabled, actor):
@@ -197,17 +202,37 @@ class Store(MySQLInbox):
 
     def enqueue(self, cursor, row, state, kind, payload):
         job = uuid.uuid4().hex
+        context = self._job_context(cursor, row["id"], kind, payload)
         cursor.execute("INSERT INTO kf_jobs (id,customer_id,kind,payload,created_at,updated_at) VALUES (%s,%s,%s,%s,%s,%s)",
                        (job, row["id"], kind, self.pack(payload), time.time(), time.time()))
+        # Immutable, allowlisted attribution in the same transaction as the job.
+        # Never infer old jobs from a customer's current (possibly replaced) binding.
+        cursor.execute("INSERT INTO kf_job_context (job_id,service,account,login_no,created_at) VALUES (%s,%s,%s,%s,%s)",
+                       (job, context.get("service"), context.get("account"), context.get("login_no"), time.time()))
         if kind == "solve":
             state["progress_checks"] = 0
             state["progress_page"] = 0
             state.pop("progress_snapshot", None)
             cursor.execute("UPDATE kf_jobs SET result=%s WHERE id=%s", (json.dumps({
                 "passed_homeworks": 0, "total_homeworks": len(payload["items"]), "passed_units": 0,
-                "current": "等待处理", "failures": [], "final": False}), job))
+                "current": "等待处理", "failures": [], "final": False,
+                "unknown": False, "has_error": False}), job))
         state["job_id"] = job
         return job
+
+    def _job_context(self, cursor, customer_id, kind, payload):
+        if kind in {"solve", "payment_check"} and payload.get("purchase_id"):
+            # Payment follow-ups inherit the purchase job, not a later binding.
+            # Legacy orders without a snapshot remain explicitly unattributed.
+            cursor.execute("SELECT x.service,x.account,x.login_no FROM kf_job_context x JOIN kf_jobs j ON j.id=x.job_id WHERE j.id=%s AND j.customer_id=%s AND j.kind='purchase'",
+                           (payload["purchase_id"], customer_id))
+            return cursor.fetchone() or {}
+        if kind == "verify":
+            account = payload.get("account")
+            return {"service": payload.get("service") or "educoder",
+                    "account": account if isinstance(account, str) and len(account) <= 256 else None}
+        cursor.execute("SELECT service,account,login_no FROM kf_bindings WHERE customer_id=%s", (customer_id,))
+        return cursor.fetchone() or {}
 
     def reply(self, cursor, row, state, replies, *, welcome_code="", sent_at=None):
         now = time.time()

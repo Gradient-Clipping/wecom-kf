@@ -75,7 +75,7 @@ class Payments:
         self.client = PaymentClient(worker.settings)
         self.last_poll = 0
 
-    def create(self, job, binding):
+    def create(self, job, binding, service=None):
         # The preassigned external number survives worker restarts and lost responses.
         items = job["payload"]["items"]
         with self.store.transaction() as cur:
@@ -84,11 +84,13 @@ class Payments:
         if retained:
             snapshot = self.store.unpack(retained["snapshot"])
         else:
-            snapshot = self.worker.service.snapshot(binding, items)
+            adapter = service or self.worker.service
+            snapshot = adapter.snapshot(binding, items)
             with self.store.transaction() as cur:
                 cur.execute("INSERT IGNORE INTO kf_purchases (id,customer_id,snapshot,status,updated_at) VALUES (%s,%s,%s,'CREATING',%s)",
                             (job["id"], job["customer_id"], self.store.pack(snapshot), time.time()))
-        service_items = self.worker.service.billing_items(snapshot)
+        adapter = service or self.worker.service
+        service_items = adapter.billing_items(snapshot)
         order = self.client.request("POST", "/orders", {"platform_code": self.worker.settings.payment_platform,
             "external_order_no": job["id"], "customer_ref": job["customer_id"], "sku": "service_units",
             "selection_version": job["id"], "service_items": service_items})
