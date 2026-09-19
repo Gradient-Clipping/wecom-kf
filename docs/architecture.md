@@ -146,9 +146,10 @@ production must not depend on a local `../educoder` path.
   administrator roles on the backend. An authenticated non-admin receives 403,
   not a redirect loop. Callback and health routes must never require SSO.
 - Reuse `https://auth.lazycampus.com/realms/lazycampus` and backend checks for the
-  existing `platform-admin` realm role. Create a separate confidential client for
-  this platform when the administrator frontend is implemented; no SSO client or
-  frontend is provisioned in the callback-only release.
+  existing `platform-admin` realm role. The administrator frontend is built
+  independently under `frontend/` with Vue 3/Vite and talks only to the FastAPI
+  `/admin/api` contract; production packages its `dist` output separately from
+  the Python source before serving it from the configured static directory.
 - Bind accounts through an explicitly authorized administrative workflow. Do not
   ask customers to put passwords directly in customer-service messages. Any future
   customer credential handoff needs a separately approved secure design.

@@ -1,21 +1,32 @@
 """Administrator console with authenticated service switches."""
 
-import time
-import secrets
+import os
 import re
-from importlib import resources
-from urllib.parse import parse_qs
+import secrets
+import time
+from pathlib import Path
 
 from authlib.integrations.starlette_client import OAuth
 from fastapi import Request
-from fastapi.responses import PlainTextResponse, RedirectResponse, JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
+from pydantic import BaseModel, ConfigDict, StrictBool, Field
 from starlette.concurrency import run_in_threadpool
 from starlette.middleware.sessions import SessionMiddleware
 
 from .store import Store
 from .admin_queries import AdminQueries, QueryValidationError, parse_job_filters
-from .admin_ui import render_admin
 from .admin_metadata import admin_metadata
+
+
+class ServiceUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    enabled: StrictBool
+
+
+class UnbindRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    login_no: str = Field(min_length=1, max_length=128)
 
 
 def install_admin(app, settings):
@@ -31,6 +42,18 @@ def install_admin(app, settings):
     store = Store(settings)
     queries = AdminQueries(store)
 
+    # The Vue application is built independently and can be served by a CDN,
+    # reverse proxy, or this API process in the container image. Keeping the
+    # directory configurable lets local Vite development and production use
+    # the same API contract without embedding templates in the backend.
+    static_dir = Path(os.getenv("ADMIN_STATIC_DIR", "")) if os.getenv("ADMIN_STATIC_DIR") else (
+        Path(__file__).resolve().parents[2] / "frontend" / "dist"
+    )
+    index_file = static_dir / "index.html"
+    assets_dir = static_dir / "assets"
+    if assets_dir.is_dir():
+        app.mount("/admin/assets", StaticFiles(directory=assets_dir), name="admin-assets")
+
     def api_session(request):
         session = request.session.get("admin", {})
         if session.get("until", 0) <= time.time():
@@ -44,17 +67,67 @@ def install_admin(app, settings):
     def api_ok(value):
         return JSONResponse(value, headers={"Cache-Control": "no-store"})
 
-    @app.get("/admin/assets/{name}")
-    async def admin_asset(name: str, request: Request):
-        if name not in {"console.css", "console.js"}:
-            return PlainTextResponse("Not found", status_code=404)
-        # Assets are public and contain no account/session data; resolve only the two names above.
+    @app.get("/admin/api/session")
+    async def admin_api_session(request: Request):
+        session = api_session(request)
+        if not session:
+            return api_error(401, "session_expired")
+        csrf = request.session.setdefault("csrf", secrets.token_urlsafe(32))
+        return api_ok({"name": session.get("name", "管理员"), "csrf": csrf,
+                       "expires_at": session["until"]})
+
+    def mutation_session(request):
+        session = api_session(request)
+        if not session:
+            return None, api_error(401, "session_expired")
+        origin = request.headers.get("origin")
+        if origin and origin != settings.public_base_url.rstrip("/"):
+            return None, api_error(403, "invalid_origin")
+        csrf = request.headers.get("x-csrf-token", "")
+        if not csrf or not secrets.compare_digest(csrf, request.session.get("csrf", "")):
+            return None, api_error(403, "invalid_csrf")
+        return session, None
+
+    @app.put("/admin/api/services/{code}")
+    async def update_service(code: str, value: ServiceUpdate, request: Request):
+        session, error = mutation_session(request)
+        if error is not None:
+            return error
         try:
-            data = resources.files("wecom_kf.admin_assets").joinpath(name).read_bytes()
-        except (FileNotFoundError, ModuleNotFoundError):
-            return PlainTextResponse("Not found", status_code=404)
-        media = "text/css; charset=utf-8" if name.endswith(".css") else "application/javascript; charset=utf-8"
-        return Response(data, media_type=media, headers={"Cache-Control": "no-store"})
+            await run_in_threadpool(store.set_service_enabled, code, value.enabled, session["name"])
+        except ValueError:
+            return api_error(404, "not_found")
+        except Exception:
+            return api_error(503, "data_unavailable")
+        return api_ok({"code": code, "enabled": value.enabled})
+
+    @app.put("/admin/api/human-support")
+    async def update_human(value: ServiceUpdate, request: Request):
+        session, error = mutation_session(request)
+        if error is not None:
+            return error
+        try:
+            await run_in_threadpool(store.set_human_support_enabled, value.enabled, session["name"])
+        except Exception:
+            return api_error(503, "data_unavailable")
+        return api_ok({"enabled": value.enabled})
+
+    @app.post("/admin/api/bindings/{customer_id}/unbind")
+    async def unbind_api(customer_id: str, value: UnbindRequest, request: Request):
+        _, error = mutation_session(request)
+        if error is not None:
+            return error
+        if not re.fullmatch(r"[0-9a-f]{64}", customer_id):
+            return api_error(400, "invalid_customer")
+        try:
+            await run_in_threadpool(store.unbind, customer_id, value.login_no)
+        except ValueError:
+            return api_error(409, "binding_mismatch")
+        except RuntimeError:
+            return api_error(409, "binding_busy")
+        except Exception:
+            return api_error(503, "data_unavailable")
+        return api_ok({"unbound": True})
 
     @app.get("/admin/api/metadata")
     async def admin_api_metadata(request: Request):
@@ -127,69 +200,6 @@ def install_admin(app, settings):
                   "created_at": row["created_at"]} for row in rows]
         return api_ok({"generated_at": int(time.time()), "items": items})
 
-    async def admin_form(request):
-        session = request.session.get("admin", {})
-        if session.get("until", 0) <= time.time():
-            return None, PlainTextResponse("Administrator access required", status_code=403)
-        origin = request.headers.get("origin")
-        if origin and origin != "null" and origin != settings.public_base_url.rstrip("/"):
-            return None, PlainTextResponse("Invalid origin", status_code=403)
-        body = await request.body()
-        if len(body) > 4096:
-            return None, PlainTextResponse("Invalid request", status_code=400)
-        form = parse_qs(body.decode("utf-8", errors="replace"))
-        token = form.get("csrf", [""])[0]
-        if not token or not secrets.compare_digest(token, request.session.get("csrf", "")):
-            return None, PlainTextResponse("Invalid CSRF token", status_code=403)
-        return (session, form), None
-
-    @app.post("/admin/services/{code}")
-    async def set_service(code: str, request: Request):
-        data, error = await admin_form(request)
-        if error:
-            return error
-        session, form = data
-        try:
-            await run_in_threadpool(store.set_service_enabled, code, form.get("enabled") == ["1"], session.get("name", "admin"))
-        except ValueError:
-            return PlainTextResponse("Unknown service", status_code=404)
-        except Exception:
-            return PlainTextResponse("Service settings unavailable", status_code=503)
-        return RedirectResponse("/#settings", status_code=303)
-
-    @app.post("/admin/human-support")
-    async def set_human_support(request: Request):
-        data, error = await admin_form(request)
-        if error:
-            return error
-        session, form = data
-        try:
-            await run_in_threadpool(store.set_human_support_enabled, form.get("enabled") == ["1"], session.get("name", "admin"))
-        except Exception:
-            return PlainTextResponse("Human support settings unavailable", status_code=503)
-        return RedirectResponse("/#settings", status_code=303)
-
-    @app.post("/admin/bindings/{customer_id}/delete")
-    async def delete_binding(customer_id: str, request: Request):
-        data, error = await admin_form(request)
-        if error:
-            return error
-        if not re.fullmatch(r"[0-9a-f]{64}", customer_id):
-            return PlainTextResponse("Invalid customer", status_code=400)
-        _, form = data
-        login_no = form.get("login_no", [""])[0]
-        if not login_no or len(login_no) > 128:
-            return PlainTextResponse("Login number required", status_code=400)
-        try:
-            await run_in_threadpool(store.unbind, customer_id, login_no)
-        except ValueError:
-            return PlainTextResponse("Binding changed or login number mismatched", status_code=409)
-        except RuntimeError:
-            return PlainTextResponse("Active task or unsettled order: cannot unbind", status_code=409)
-        except Exception:
-            return PlainTextResponse("Binding unavailable", status_code=503)
-        return RedirectResponse("/#bindings", status_code=303)
-
     @app.get("/admin/auth/callback")
     async def callback(request: Request):
         try:
@@ -208,18 +218,30 @@ def install_admin(app, settings):
             return PlainTextResponse("SSO verification failed", status_code=403)
         return RedirectResponse("/", status_code=303)
 
-    # The public domain root is the console; keep old bookmarks and callback
-    # URLs working without broad catch-all routes or proxy rewrites.
+    @app.get("/admin/auth/login")
+    async def login(request: Request):
+        if api_session(request):
+            return RedirectResponse("/", status_code=303)
+        request.session.clear()
+        try:
+            return await client.authorize_redirect(request, settings.public_base_url + "/admin/auth/callback")
+        except Exception:
+            return PlainTextResponse("Identity service unavailable", status_code=503)
+
     @app.get("/")
-    @app.get("/admin/")
+    async def admin_frontend():
+        if not index_file.is_file():
+            return PlainTextResponse(
+                "Admin frontend is not built. Run `cd frontend && npm install && npm run build`, "
+                "or start the Vite dev server on port 5173.",
+                status_code=503,
+            )
+        return FileResponse(index_file, media_type="text/html",
+                            headers={"Cache-Control": "no-store"})
+
+    # Page rendering belongs to the separately built Vue frontend. Keep old
+    # bookmarks working while all data access remains under /admin/api.
     @app.get("/admin")
-    async def admin(request: Request):
-        session = request.session.get("admin", {})
-        if session.get("until", 0) <= time.time():
-            request.session.clear()
-            try:
-                return await client.authorize_redirect(request, settings.public_base_url + "/admin/auth/callback")
-            except Exception:
-                return PlainTextResponse("Identity service unavailable", status_code=503)
-        csrf = request.session.setdefault("csrf", secrets.token_urlsafe(32))
-        return render_admin(session.get("name", "管理员"), csrf)
+    @app.get("/admin/")
+    async def legacy_entry():
+        return RedirectResponse("/", status_code=307)

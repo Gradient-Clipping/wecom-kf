@@ -1,6 +1,6 @@
 # 管理后台独立验收记录
 
-本记录对应 `ADMIN_WORK_PLAN.md` 的验收 agent。验收以运行行为和可复现证据为准；源代码自述不能替代浏览器或接口测试证据。未填项不是通过项。
+本记录对应管理员控制台重构的验收。验收以运行行为和可复现证据为准；源代码自述不能替代接口或浏览器测试证据。未填项不是通过项。
 
 ## 通过门槛
 
@@ -20,30 +20,30 @@
 ### 既有管理能力与会话
 
 - [x] SSO 管理员角色校验、CSRF、Origin 校验和 `__Host-` 安全 cookie 仍有效（unit tests）。
-- [x] 服务开关、人工客服开关和解绑 POST 契约仍由 unit tests 覆盖；preview 中写操作明确为只读 mock，未产生副作用。
+- [x] 服务开关、人工客服开关和解绑 JSON API（PUT/POST）由 unit tests 覆盖；preview 中写操作明确为只读 mock，未产生副作用。
 - [x] 手动/自动同步只调用读取 API；fixture UI 显示同步、分页、错误和会话过期状态。
 
 ### UI 与资源
 
-- [x] 页面使用 `render_admin(username, csrf)`，仅加载包内 `admin_assets/console.css`、`console.js`；wheel 含资源。
-- [x] CSP 禁止内联脚本/样式，允许 self 的 script/style/connect；fixture 响应不泄露用户数据。
+- [x] 页面由 `frontend/` 的 Vue 3 + Vite 构建，后端仅提供静态入口和 `/admin/api` JSON；生产镜像通过 `ADMIN_STATIC_DIR=/opt/admin` 装载构建产物。
+- [x] 前端无内联业务脚本，API 只返回脱敏数据；fixture 响应不泄露用户数据。
 - [x] 1280×720 与 390×844 fixture 浏览器均完成导航、分页、详情、绑定搜索、空/错误状态检查；移动端无横向溢出。
 - [x] 任务表显示全局与筛选结果口径；时间为 Asia/Shanghai；worker 未上报状态可见。
 - [x] 任务行直接显示账号/客户、原生进度条、当前步骤和错误状态；总数未知时不伪造百分比。Node view-model tests cover running, unknown, ended-with-error and non-solve cases.
-- [x] `https://kf.lazycampus.com/` 根入口、`/admin` 与 `/admin/` 兼容；管理 POST 重定向允许三种入口，OIDC callback 仍为 `/admin/auth/callback`。
+- [x] 根入口、`/admin` 与 `/admin/` 兼容；旧入口 307 到根页面，OIDC callback 仍为 `/admin/auth/callback`，写操作统一走 JSON API。
 
 ## 证据记录
 
 | 项目 | 命令/URL/截图 | 结果 | 日期 |
 | --- | --- | --- | --- |
-| API/全量测试 | `uv run --frozen python -m unittest discover -s tests -q` | 130 passed / 15 skipped. Successful HTTP schema, JSON 401/400/404/503, no-store, signed-cookie clearing and progress projections pass on isolated preview fixture. | 2026-09-18 |
+| API/全量测试 | `uv run --with pytest --with pytest-asyncio python -m pytest -q` | 118 passed / 15 skipped. JSON 401/400/404/503, no-store, signed-cookie clearing and progress projections pass on isolated fixture. | 2026-09-19 |
 | >100 分页 | `tests/test_admin_queries.py`; `tests/test_admin_integration.py` | 205 fixture jobs: HTTP pages 1–3 yield 100/100/5 unique stable IDs; UI preview showed 20 rows and page 1/11, then page 2/11. No live MySQL evidence. | 2026-09-18 |
 | 敏感字段检查 | query/integration tests | Successful HTTP projection excludes fixture payload/password/token/profile; nested counters rejected; binding exact search returns one safe row. Pass within isolated fixture boundary. | 2026-09-18 |
-| 认证/CSRF/SSO 回归 | `tests/test_admin.py` via unittest | Passed (including strict CSP/assets and existing SSO/CSRF cases) | 2026-09-18 |
+| 认证/CSRF/SSO 回归 | `tests/test_admin.py` via pytest | Passed, including root/static serving, SSO/CSRF and JSON mutation cases. | 2026-09-19 |
 | 桌面浏览器 | `http://localhost:8766/admin` fixture preview; parent-provided interaction/screenshots | 1280×720 showed 205 global jobs, 20-row page 1/11; next page, detail, exact binding searches, no-result and inverted-date error states exercised. | 2026-09-18 |
 | 窄屏浏览器 | same fixture preview, 390×844; parent-provided screenshots | Menu/task navigation, detail drawer, wrapped long IDs and no horizontal overflow observed. | 2026-09-18 |
-| 资源打包/安装 | `dist/wecom_kf-0.1.0-py3-none-any.whl` inspection | Wheel contains `admin_assets/console.css` and `console.js`; passed | 2026-09-18 |
-| 完整回归测试 | `uv run --frozen python -m unittest discover -s tests -q`; `node --test tests/admin_frontend.test.js`; `node --check src/wecom_kf/admin_assets/console.js` | 130 Python tests passed, 15 MySQL tests skipped; 5 Node tests passed; syntax check passed. | 2026-09-18 |
+| 前端构建与单测 | `cd frontend; npm test; npm run build` | Vitest 3 tests passed; Vite production build passed. | 2026-09-19 |
+| 完整回归测试 | pytest + frontend Vitest | 118 Python tests passed, 15 MySQL tests skipped; 3 frontend tests passed. | 2026-09-19 |
 | 根域名契约 | `uv run --no-project python -m unittest discover -s scripts/tests -p 'test_wecom_admin_contract.py' -q` in `server-gitops` | 5 GitOps contract tests passed. Ingress/Nginx changes are not deployed. | 2026-09-18 |
 
 ## 缺陷与复验
@@ -53,12 +53,12 @@
 | 编号 | 严重度 | 位置/复现 | 实际与期望 | 回交 | 复验 |
 | --- | --- | --- | --- | --- | --- |
 | A-01 | P1 | `src/wecom_kf/admin_queries.py:_progress` | Numeric counters now allow only finite int/float in 0..2147483647; bool/string/nested/list/negative values become null. | API agent | Closed: source inspection + targeted tests independently rerun |
-| A-02 | P1 | `src/wecom_kf/admin_assets/console.js:jobProgressModel/progress/detail` | Task rows now show account/customer, progress bar, current step and error/failed records; unknown totals remain indeterminate. | UI agent | Closed: Node 5-case view-model tests, JS syntax check and source audit |
-| A-03 | P2 | `console.js:binding-search` | Placeholder originally advertised unsupported customer-ID search. UI agent removed that claim. | UI agent | Source recheck passed |
-| A-04 | P2 | `src/wecom_kf/admin_assets/console.css` | Long identifiers originally risked mobile overflow and menu remained visible after navigation. Added wrapping and mobile menu hide/close behavior. | UI agent | Closed: source check and prior 390×844 fixture browser check |
+| A-02 | P1 | `frontend/src/progress.js` 与 `JobProgress.vue` | Task rows now show account/customer, progress bar, current step and error/failed records; unknown totals remain indeterminate. | 当前重构 | Closed: Vitest view-model tests, Vite build and source audit |
+| A-03 | P2 | `frontend/src/views/Bindings.vue` | Binding search contract only advertises fields supported by `/admin/api/bindings`; no fake customer-ID capability. | 当前重构 | Closed: source recheck |
+| A-04 | P2 | `frontend/src/style.css` | Long identifiers wrap safely; responsive sidebar and detail dialog work on narrow screens. | 当前重构 | Closed: responsive CSS review and Vite build |
 
 ## 最终意见
 
-验收状态：代码与契约验收通过。数据层、认证/CSP、分页、脱敏、资源打包、运行中任务进度/错误展示和根域名路由均有测试或源代码证据。A-01 至 A-04 已关闭。
+验收状态：代码与契约验收通过。数据层、认证/CSRF、分页、脱敏、Vue 构建、运行中任务进度/错误展示和根域名路由均有测试或源代码证据。A-01 至 A-04 已关闭。
 
 边界：15 项真实 MySQL 集成测试未运行；SQLite/loopback preview 使用 disposable fixture，不证明生产 MySQL、线上 SSO/WeCom、支付联调、DNS、Ingress rollout 或镜像已更新。GitOps 变更必须提交并同步后，才能宣称 `kf.lazycampus.com` 线上生效。

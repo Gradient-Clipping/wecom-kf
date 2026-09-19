@@ -6,6 +6,10 @@
 !src/wecom_kf/**
 !src/educoder/
 !src/educoder/**
+!frontend/
+!frontend/**
+frontend/node_modules/
+frontend/dist/
 !resources/
 !resources/question_bank.sqlite
 !assets/

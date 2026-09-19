@@ -6,7 +6,10 @@
 
 ```powershell
 cd 'C:\kaifa\com two\wecom-kf'
-uv sync --frozen
+cd frontend
+npm ci
+npm run build
+cd ..
 uv run --frozen python -m tests.admin_preview
 ```
 
@@ -18,7 +21,7 @@ uv run --frozen python -m tests.admin_preview
 - worker 未上报显示“未知/未上报”；
 - 390×844 窄屏下菜单、详情抽屉和长 ID 均可用。
 
-左侧导航是四个独立的哈希页面，可直接打开或刷新：`#overview` 总览、`#jobs` 任务中心、`#bindings` 账号绑定、`#settings` 服务设置。每次切页只加载当前页面需要的数据；左侧边框和当前导航标记使用 `#FFBE6E`。页面背景已迁移 SecMind 的 `ControlStarfield` 思路，使用同源 Canvas 绘制浅蓝星云、发光粒子和轻微指针视差；它不拦截交互，且在 `prefers-reduced-motion` 下只绘制静态帧。
+左侧导航是四个 Vue Router 页面，可直接打开或刷新：`#/overview` 总览、`#/jobs` 任务中心、`#/bindings` 账号绑定、`#/settings` 服务设置。每次切页只加载当前页面需要的数据；左侧边框和当前导航标记使用 `#FFBE6E`。页面背景已迁移 SecMind 的 `ControlStarfield` 思路，使用同源 Canvas 绘制浅蓝星云、发光粒子和轻微指针视差；它不拦截交互，且在 `prefers-reduced-motion` 下只绘制静态帧。
 
 预览中的服务开关和解绑是只读 mock，不会修改任何数据。按 `Ctrl+C` 停止服务。
 
@@ -27,16 +30,15 @@ uv run --frozen python -m tests.admin_preview
 ```powershell
 cd 'C:\kaifa\com two\wecom-kf'
 uv run --frozen python -m unittest discover -s tests -v
-node --check src/wecom_kf/admin_assets/console.js
+cd frontend
+npm ci
+npm test
+npm run build
+cd ..
 uv build --wheel
 ```
 
-以本次命令实际输出为准；需要隔离 MySQL 的测试在未提供测试数据库时会跳过。wheel 应包含：
-
-```text
-wecom_kf/admin_assets/console.css
-wecom_kf/admin_assets/console.js
-```
+以本次命令实际输出为准；需要隔离 MySQL 的测试在未提供测试数据库时会跳过。生产镜像构建时会在 Node 构建阶段生成 `frontend/dist`，并通过 `ADMIN_STATIC_DIR=/opt/admin` 提供静态文件；wheel 本身不替代前端构建。
 
 ## 3. 生产配置沿用已有 GitOps
 
@@ -97,4 +99,4 @@ uv run --env-file .env python -m wecom_kf.worker executor
 
 ## 5. 与原目录的差异结论
 
-`C:\kaifa\com\wecom-kf` 当前仍有未提交的 `admin.py`、`store.py`、`tests/test_admin.py` 和 `scripts/preview_admin.py`。其中包含取消 pending 任务和旧页面详情实验；新版已采用外置资源、只读脱敏 API、稳定分页和严格 CSP，因此没有直接合并这些改动。若后续要增加“取消任务”，应单独设计 API、CSRF、状态竞争和审计测试，不能把旧 `job_detail_for_admin` 的 payload/result 返回逻辑直接搬回后台。
+旧目录中的取消 pending 任务和页面详情实验不属于当前重构；新版采用 Vue 静态构建、只读脱敏 API、稳定分页和 JSON 写入契约，因此没有直接搬回这些改动。若后续要增加“取消任务”，应单独设计 API、CSRF、状态竞争和审计测试，不能把旧 `job_detail_for_admin` 的 payload/result 返回逻辑直接搬回后台。

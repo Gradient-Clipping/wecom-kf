@@ -4,12 +4,13 @@
 
 - 本项目对应 GitHub 仓库 `Gradient-Clipping/wecom-kf`，源码目录为 `C:\kaifa\com two\wecom-kf`。
 - 相邻的 `server-gitops` 是生产期望状态仓库；应用代码和集群配置分开提交。
-- 本项目是 FastAPI 微信客服后端，包含企业微信回调、消息网关、任务执行、支付、管理员面板和可选服务适配器。
+- 本项目是 FastAPI 微信客服后端，包含企业微信回调、消息网关、任务执行、支付、管理员 API 和可选服务适配器；管理员界面位于 `frontend/`，使用 Vue 3 + Vite，与后端通过 `/admin/api` JSON 契约通信。
 
 ## 运行入口
 
 - 本地依赖：`uv sync --python 3.13`。
-- 管理员离线预览：`uv run --frozen python -m tests.admin_preview`，访问 `http://127.0.0.1:8766/` 或 `/admin`。
+- 管理员界面构建：在 `frontend/` 执行 `npm ci`、`npm run build`；构建产物由容器复制到 `/opt/admin`，后端通过 `ADMIN_STATIC_DIR` 提供根入口。离线预览先构建前端，再运行 `uv run --frozen python -m tests.admin_preview`，访问 `http://127.0.0.1:8766/` 或 `/admin`。
+- 前端开发服务器：`cd frontend; npm run dev`；将 `ADMIN_API_TARGET` 指向本地后端，Vite 仅代理 `/admin/api` 和 `/admin/auth`。
 - 真实应用：`uv run --env-file .env uvicorn wecom_kf.app:create_app --factory --host 127.0.0.1 --port 8000 --no-access-log`。
 - Worker 必须按角色单独运行：`gateway`、`actions`、`executor`。
 - 回调入口为 `/callbacks/wecom/kf`，健康检查为 `/healthz`、`/readyz`；管理员入口为 `/`、`/admin`，登录使用 OIDC/SSO。
@@ -37,10 +38,10 @@
 ## 开发与验收
 
 - 常规测试：`uv run --frozen python -m unittest discover -s tests -q`。
-- 前端脚本检查：`node --check src/wecom_kf/admin_assets/console.js`；前端测试：`node --test tests/admin_frontend.test.js`。
+- 前端检查：`cd frontend; npm ci; npm test; npm run build`。管理员页面不再依赖 Python 模板或 `admin_assets` 旧资源。
 - 静态检查：`uv run --frozen ruff check src tests`；构建检查：`uv build --wheel`。
 - MySQL 集成测试只能使用数据库名以 `_test` 结尾的隔离实例，设置 `TEST_MYSQL=1` 后运行；没有隔离库时跳过，不得连接生产。
-- 修改运行架构、生产域名、GitOps 路径、Secret 名称或安全边界时，同步更新 `docs/integration-release.md` 和本文件；普通业务修改不需要改工作区根规则。
+- 修改运行架构、生产域名、GitOps 路径、Secret 名称或安全边界时，同步更新 `docs/integration-release.md`、管理员启动文档和本文件；普通业务修改不需要改工作区根规则。
 
 ## 发布边界
 
