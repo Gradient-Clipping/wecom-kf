@@ -7,10 +7,60 @@ import threading
 from educoder import EduCoderClient, QuestionBank, ShixunSolver, extract_course_identifier
 from educoder.exceptions import EduCoderError
 from educoder.utils import mask_phone
+from .failure_details import add_failure, exception_detail, safe_error_text
 
 
 class InvalidCredentials(RuntimeError):
     pass
+
+
+def _diagnostics_reason(diagnostics):
+    if not isinstance(diagnostics, dict):
+        return None
+    message = diagnostics.get("message") or diagnostics.get("last_compile_output")
+    if message:
+        return safe_error_text(message)
+    errors = diagnostics.get("errors")
+    if isinstance(errors, list) and errors:
+        first = errors[0] if isinstance(errors[0], dict) else {"error": errors[0]}
+        error_type = first.get("error_type") or first.get("type")
+        visible = diagnostics.get("visible_error_count")
+        restricted = diagnostics.get("restricted_error_count")
+        suffix = []
+        if isinstance(visible, int):
+            suffix.append(f"可见失败用例 {visible} 个")
+        if isinstance(restricted, int) and restricted:
+            suffix.append(f"受限失败用例 {restricted} 个")
+        return "；".join(filter(None, [safe_error_text(error_type or "评测用例未通过"), *suffix]))
+    if diagnostics.get("compile_success") is False:
+        return "编译未通过，平台没有返回编译输出"
+    return None
+
+
+def _evaluation_reason(entry):
+    """Extract only provider diagnostics that are safe to persist."""
+    if not isinstance(entry, dict):
+        return "平台返回了无法解析的失败结果"
+    # A solver may report ``attempt_limit_reached`` at the top level while the
+    # useful compiler/test diagnostic is retained on its last attempt.
+    attempts = entry.get("attempts")
+    if isinstance(attempts, list):
+        for attempt in reversed(attempts):
+            reason = _diagnostics_reason(attempt.get("diagnostics")) if isinstance(attempt, dict) else None
+            if reason:
+                return reason
+            if isinstance(attempt, dict) and attempt.get("error"):
+                return safe_error_text(attempt["error"])
+    error = entry.get("error")
+    if error:
+        return safe_error_text(error)
+    if entry.get("evaluation_uncertain"):
+        return "评测状态不确定，平台没有确认本次提交结果"
+    diagnostics = entry.get("diagnostics")
+    reason = _diagnostics_reason(diagnostics)
+    if reason:
+        return reason
+    return "平台返回未通过，但没有提供更具体的诊断信息"
 
 
 class EduCoderService:
@@ -110,9 +160,12 @@ class EduCoderService:
 
     def solve(self, binding, items, progress):
         client = self.client(binding["account"], binding["password"])
+        total_challenges = sum(len(item.get("challenges") or []) for item in items)
         result = {"passed_homeworks": 0, "total_homeworks": len(items), "passed_units": 0,
-                  "current": "", "failures": [], "homeworks": [], "final": False, "unknown": False}
+                  "total_challenges": total_challenges or None, "current": "", "failures": [],
+                  "homeworks": [], "final": False, "unknown": False, "has_error": False}
         guard = threading.Lock()
+        finalized_units = 0
         try:
             info = client.ensure_logged_in()
             if str(info.get("login")) != binding["login_no"]:
@@ -126,6 +179,15 @@ class EduCoderService:
                     if event.get("event") == "question_ready":
                         title = event.get("title", "")
                         result["current"] = f"实训：{current_item.get('title', '')}\n第{event['position']}关：{title}"
+                    elif event.get("event") == "evaluated" and event.get("passed"):
+                        result["passed_units"] += 1
+                    elif event.get("event") in {"question_error", "tool_rejected"}:
+                        result["unknown"] = True
+                        result["has_error"] = True
+                        reason = event.get("error") or event.get("event")
+                        add_failure(result, f"实训：{current_item.get('title', '')}\n"
+                                           f"第{event.get('position', '当前')}关：{event.get('title', '当前题目')}\n"
+                                           f"原因：{safe_error_text(reason)}")
                     progress(result)
             solver = ShixunSolver(client, bank, max_attempts=5, evaluation_timeout=180, on_event=on_event)
             for item in items:
@@ -141,8 +203,10 @@ class EduCoderService:
                               - sum(r.get("skip_reason") == "already_completed" for r in entries))
                     if any(r.get("evaluation_uncertain") for r in entries):
                         result["unknown"] = True
-                    result["passed_units"] += passed
+                    result["passed_units"] = max(result["passed_units"], finalized_units + passed)
+                    finalized_units += passed
                     completed = bool(answer.get("skipped")) or (bool(entries) and all(r.get("passed") for r in entries))
+                    result["has_error"] = result["has_error"] or not completed
                     result["passed_homeworks"] += int(completed)
                     result["homeworks"].append({"title": item["title"], "ok": completed,
                                    "skipped_completed": answer.get("skipped_completed_count", 0),
@@ -151,13 +215,24 @@ class EduCoderService:
                     for entry in answer.get("results", []):
                         if not entry.get("passed"):
                             title = entry.get("challenge", "")
-                            result["failures"].append(f"实训：{item['title']}\n第{entry['position']}关：{title}")
-                except Exception:
+                            add_failure(result, f"实训：{item['title']}\n第{entry['position']}关：{title}\n"
+                                               f"原因：{_evaluation_reason(entry)}")
+                    result["has_error"] = result["has_error"] or any(not entry.get("passed") for entry in entries)
+                except Exception as exc:
                     result["unknown"] = True
-                    result["homeworks"].append({"title": item["title"], "ok": False, "reason": "upstream_or_evaluation_error"})
-                    for c in item.get("challenges", []):
-                        result["failures"].append(f"实训：{item['title']}\n第{c['position']}关：{c['name']}")
+                    result["has_error"] = True
+                    reason = exception_detail(exc, secrets=(binding.get("account"), binding.get("password")))
+                    result["homeworks"].append({"title": item["title"], "ok": False, "reason": reason})
+                    challenges = item.get("challenges", [])
+                    if challenges:
+                        for c in challenges:
+                            add_failure(result, f"实训：{item['title']}\n第{c['position']}关：{c['name']}\n原因：{reason}")
+                    else:
+                        add_failure(result, f"实训：{item['title']}\n原因：{reason}")
                 progress(result)
+            result["has_error"] = bool(result["has_error"] or result["failures"])
+            # A known, partially failed evaluation is still final; ``has_error``
+            # is the operator-facing signal and must not suppress refund math.
             result.update(final=not result["unknown"], current="已结束" if not result["unknown"] else "评测结果待核对")
             return result
         finally:

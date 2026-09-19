@@ -32,7 +32,7 @@ class WorkflowTests(unittest.TestCase):
         with self.store.transaction() as cur:
             cur.execute("DELETE FROM kf_meta WHERE name LIKE 'service:%'")
             cur.execute("DELETE FROM kf_meta WHERE name='human_support_enabled'")
-            for table in ("kf_purchases", "kf_customers", "kf_bindings", "kf_jobs", "kf_messages",
+            for table in ("kf_purchases", "kf_customers", "kf_bindings", "kf_job_context", "kf_jobs", "kf_messages",
                           "kf_outbox", "kf_cursors", "kf_message_history"):
                 cur.execute(f"DELETE FROM {table}")
         self.api, self.service = Mock(), Mock()

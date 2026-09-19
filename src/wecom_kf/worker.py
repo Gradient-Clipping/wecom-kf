@@ -19,6 +19,9 @@ from . import dialog
 from .config import Settings
 from .crypto import CallbackCrypto, parse_xml, xml_field
 from .educoder_service import EduCoderService, InvalidCredentials
+from .failure_details import add_failure, exception_detail
+from .service_catalog import SERVICES
+from .service_registry import ServiceRegistry, UnknownService
 from .store import Store
 from .wecom import WeCom, WeComError
 from .payments import Payments, PaymentRejected, business_day, waiting
@@ -39,6 +42,7 @@ class Worker:
         self.settings = settings
         self.store = store or Store(settings)
         self.api = api or WeCom(settings)
+        self.registry = ServiceRegistry(settings, overrides={"educoder": service} if service else None)
         self.service = service or EduCoderService(settings)
         self.stop = threading.Event()
         self.last_poll = 0
@@ -154,6 +158,8 @@ class Worker:
             content = message.get("text", {}) if message.get("msgtype") == "text" else {}
             state["available_services"] = [s for s in store.service_states(cur) if s["enabled"]]
             state["human_support_enabled"] = store.human_support_enabled(cur)
+            if binding:
+                state["service"] = binding.get("service", "educoder")
             replies, kind = dialog.advance(state, binding, content.get("content"), content.get("menu_id", ""),
                                            entered=entered, now=now, execution_enabled=self.settings.execution_enabled,
                                            payment_enabled=self.settings.payment_ready)
@@ -186,19 +192,22 @@ class Worker:
                 if binding:
                     raise RuntimeError("Binding already exists")
                 pending, profile = state["pending"], state["profile"]
-                cur.execute("INSERT INTO kf_bindings (customer_id,service,account,password,login_no,profile,created_at) VALUES (%s,'educoder',%s,%s,%s,%s,%s)",
-                            (row["id"], pending["account"], pending["password"], profile["login"], json.dumps(profile), now))
+                service_code = pending.get("service") or state.get("service") or "educoder"
+                cur.execute("INSERT INTO kf_bindings (customer_id,service,account,password,login_no,profile,created_at) VALUES (%s,%s,%s,%s,%s,%s,%s)",
+                            (row["id"], service_code, pending["account"], pending["password"], profile["login"], json.dumps(profile), now))
                 state.pop("pending", None)
                 kind = "list"
             if kind:
+                service_code = state.get("service") or (binding or {}).get("service") or "educoder"
                 if kind == "verify":
                     payload = dict(state["pending"])
+                    payload["service"] = service_code
                 elif kind in {"solve", "purchase"}:
-                    payload = {"items": [state["items"][i] for i in state["selected"]]}
+                    payload = {"service": service_code, "items": [state["items"][i] for i in state["selected"]]}
                 elif kind == "payment_check":
                     payload = {"purchase_id": state["purchase_id"]}
                 else:
-                    payload = {}
+                    payload = {"service": service_code}
                 job_id = store.enqueue(cur, row, state, kind, payload)
                 if kind == "purchase":
                     state["purchase_id"] = job_id
@@ -282,7 +291,12 @@ class Worker:
             row = cur.fetchone()
             state = store.unpack(row["state"])
             binding = store.binding(cur, row["id"])
-            obsolete = state.get("job_id") != job["id"] or (job["kind"] in {"verify", "list"} and state.get("expires_at", 0) <= time.time())
+            service_code = job["payload"].get("service") or (binding or {}).get("service") or "educoder"
+            try:
+                service = self.registry.get(service_code)
+            except UnknownService:
+                service = None
+            obsolete = (service is None and job["kind"] != "payment_check") or state.get("job_id") != job["id"] or (job["kind"] in {"verify", "list"} and state.get("expires_at", 0) <= time.time())
             if job["kind"] == "solve":
                 purchase_id = job["payload"].get("purchase_id")
                 cur.execute("SELECT document,solve_job_id FROM kf_purchases WHERE id=%s", (purchase_id,))
@@ -296,7 +310,7 @@ class Worker:
                         store.reply(cur, row, state, [dialog.text("订单尚未确认付款，任务未启动。")])
                         store.save_customer(cur, row, state)
             state["available_services"] = [s for s in store.service_states(cur) if s["enabled"]]
-            closed = not any(s["code"] == "educoder" for s in state["available_services"])
+            closed = not any(s["code"] == service_code for s in state["available_services"])
             new_purchase = False
             if closed and job["kind"] == "purchase":
                 cur.execute("SELECT id FROM kf_purchases WHERE id=%s", (job["id"],))
@@ -308,13 +322,20 @@ class Worker:
                 store.reply(cur, row, state, [dialog.services(state)])
                 store.save_customer(cur, row, state)
             if obsolete:
+                if service is None:
+                    state.update(phase="idle", actions={})
+                    store.reply(cur, row, state, [dialog.text("任务所属服务当前不可用，请联系管理员。")])
+                    store.save_customer(cur, row, state)
                 cur.execute("UPDATE kf_jobs SET status='cancelled',payload=NULL WHERE id=%s", (job["id"],))
                 return True
         invalid, failed, result = False, False, None
+        last_progress = None
 
         def progress(value):
+            nonlocal last_progress
             checkpoint()
             if value is not None:
+                last_progress = dict(value)
                 with store.transaction() as cur:
                     cur.execute("UPDATE kf_jobs SET result=%s,updated_at=%s WHERE id=%s AND status='running'",
                                 (json.dumps(value, ensure_ascii=False), time.time(), job["id"]))
@@ -322,44 +343,63 @@ class Worker:
         try:
             checkpoint()
             if job["kind"] == "verify":
-                result = self.service.verify(**job["payload"])
+                verify_payload = {key: value for key, value in job["payload"].items() if key != "service"}
+                result = service.verify(**verify_payload)
             elif job["kind"] == "list":
-                result = self.service.list_homeworks(binding)
+                result = service.list_homeworks(binding)
             elif job["kind"] == "purchase":
-                result = self.payments.create(job, binding)
+                result = self.payments.create(job, binding, service=service)
             elif job["kind"] == "payment_check":
                 self.payments.manual(job["payload"]["purchase_id"], job["id"])
                 with store.transaction() as cur:
                     cur.execute("UPDATE kf_jobs SET status='complete',payload=NULL,updated_at=%s WHERE id=%s", (time.time(), job["id"]))
                 return True
             elif self.settings.execution_enabled:
-                result = self.service.solve(binding, job["payload"]["items"], progress)
+                result = service.solve(binding, job["payload"]["items"], progress)
             else:
                 raise RuntimeError("Execution disabled")
-        except InvalidCredentials:
+        except InvalidCredentials as exc:
             invalid = True
+            if job["kind"] == "solve":
+                result = dict(last_progress or {})
+                result.update(current="账号验证失败", unknown=True, has_error=True, final=False)
+                add_failure(result, f"账号验证失败：{exception_detail(exc) if str(exc) else '账号或密码未通过平台验证'}")
         except (PaymentRejected, ValueError) as exc:
             if job["kind"] != "purchase":
                 failed = True
+                if job["kind"] == "solve":
+                    result = dict(last_progress or {})
+                    result.update(current="执行失败，待核对", unknown=True, has_error=True, final=False)
+                    add_failure(result, f"执行失败：{exception_detail(exc)}")
             else:
                 with store.transaction() as cur:
                     cur.execute("SELECT * FROM kf_customers WHERE id=%s FOR UPDATE", (job["customer_id"],))
-                    row = cur.fetchone(); state = store.unpack(row["state"])
+                    row = cur.fetchone()
+                    state = store.unpack(row["state"])
                     state.update(phase="idle", actions={})
                     cur.execute("UPDATE kf_jobs SET status='failed',payload=NULL WHERE id=%s", (job["id"],))
                     cur.execute("UPDATE kf_purchases SET status='REJECTED' WHERE id=%s AND status='CREATING'", (job["id"],))
                     store.reply(cur, row, state, [dialog.text(str(exc)), dialog.services(state)])
                     store.save_customer(cur, row, state)
                 return True
-        except Exception:
+        except Exception as exc:
             failed = True
+            if job["kind"] == "solve":
+                # Preserve the latest durable counters so the admin view can
+                # explain an interrupted/failed run instead of reverting to a
+                # blank result. Exception text is persisted only after bounded
+                # credential redaction by ``failure_details``.
+                result = dict(last_progress or {})
+                result.update(current="执行异常，待核对", unknown=True, has_error=True, final=False)
+                add_failure(result, f"执行异常：{exception_detail(exc)}")
             log.warning("service_job_failed kind=%s", job["kind"])
         if failed and job["kind"] in {"purchase", "payment_check"}:
             # Keep the same idempotency/check ID after an uncertain request.
             with store.transaction() as cur:
                 cur.execute("UPDATE kf_jobs SET status='pending',updated_at=%s WHERE id=%s", (time.time(), job["id"]))
                 cur.execute("SELECT * FROM kf_customers WHERE id=%s FOR UPDATE", (job["customer_id"],))
-                row = cur.fetchone(); state = store.unpack(row["state"])
+                row = cur.fetchone()
+                state = store.unpack(row["state"])
                 if state.get("payment_error_job") != job["id"]:
                     state["payment_error_job"] = job["id"]
                     store.reply(cur, row, state, [dialog.text("支付服务暂时异常，正在重试。本次不扣查款次数，请稍候。")])
@@ -374,7 +414,8 @@ class Worker:
                 cur.execute("UPDATE kf_jobs SET status='cancelled',payload=NULL WHERE id=%s", (job["id"],))
                 return True
             if job["kind"] == "verify":
-                replies = dialog.verified(state, result, invalid=invalid, unavailable=failed, now=time.time())
+                replies = dialog.verified(state, result, invalid=invalid, unavailable=failed, now=time.time(),
+                                           service_name=next((name for code, name in SERVICES.items() if code == service_code), "服务"))
             elif job["kind"] == "list":
                 replies = dialog.listed(state, result, failed=failed)
             elif job["kind"] == "purchase":
@@ -432,8 +473,9 @@ class Worker:
                 state = store.unpack(row["state"])
                 if state.get("job_id") == job["id"]:
                     state.update(phase="idle", pending={}, actions={})
+                    state.pop("service", None)
                     state.pop("job_id", None)
-                    summary = "服务重启中断了任务，未自动重复提交。请核对头歌状态后重新选择服务。"
+                    summary = "服务重启中断了任务，未自动重复提交。请核对当前服务状态后重新选择服务。"
                     state["last_result"] = summary
                     store.reply(cur, row, state, [dialog.text(summary), dialog.services(state)])
                     store.save_customer(cur, row, state)
@@ -448,7 +490,7 @@ class Worker:
             for row in cur.fetchall():
                 state = self.store.unpack(row["state"])
                 if state.get("phase") not in {"running", "paying", "purchasing"} and state.get("expires_at", 0) <= time.time():
-                    for key in ("pending", "profile", "items", "selected", "actions", "job_id"):
+                    for key in ("pending", "profile", "items", "selected", "actions", "job_id", "service"):
                         state.pop(key, None)
                     state.update(phase="idle", expired=True)
                     # Leave the expired timestamp so the next input only opens a menu.

@@ -8,7 +8,10 @@ __pycache__/
 .ruff_cache/
 *.egg-info/
 build/
+build-stale-backup/
 dist/
+frontend/node_modules/
+frontend/dist/
 .cache/
 data/
 logs/

@@ -145,9 +145,12 @@ def begin_list(state):
 def advance(state, binding, content, menu_id="", *, entered=False, now=0, execution_enabled=True, payment_enabled=False):
     """Mutate one customer's state; return replies and at most one queued job kind."""
     enabled = {item["code"] for item in available(state)}
-    if (not enabled and not state.get("human_support_enabled")) or (state.get("phase", "idle") != "idle" and "educoder" not in enabled):
+    active_service = state.get("service") or (state.get("pending") or {}).get("service")
+    # Older persisted conversations may predate multi-service routing and have
+    # no service marker. Keep those states resumable; new flows always set it.
+    if (not enabled and not state.get("human_support_enabled")) or (state.get("phase", "idle") != "idle" and active_service and active_service not in enabled):
         if state.get("phase") not in {"running", "paying", "purchasing"}:
-            for key in ("pending", "profile", "items", "selected", "job_id"):
+            for key in ("pending", "profile", "items", "selected", "job_id", "service"):
                 state.pop(key, None)
             state["phase"] = "idle"
         state["actions"] = {}
@@ -163,7 +166,7 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         return [text("请长按扫描图中二维码添加人工客服。"),
                 {"msgtype": "image", "image": {"asset": "human_service_card"}}], None
     if phase not in {"running", "paying", "purchasing"} and state.get("expires_at", now + 1) <= now:
-        for key in ("pending", "profile", "items", "selected", "actions", "job_id"):
+        for key in ("pending", "profile", "items", "selected", "actions", "job_id", "service"):
             state.pop(key, None)
         state.update(phase="idle", expires_at=now + 300)
         return [services(state)], None
@@ -201,11 +204,16 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         return [services(state)], None
     typed_service = next((item["code"] for i, item in enumerate(available(state), 1)
                           if normalize(content or "") in {item["name"], str(i)}), None) if phase == "idle" else None
-    if "educoder" in enabled and (op == "educoder" or typed_service == "educoder"):
+    selected_service = op if op in enabled else typed_service
+    if selected_service:
+        service_name = next((item["name"] for item in available(state) if item["code"] == selected_service), selected_service)
+        if binding and binding.get("service", "educoder") != selected_service:
+            return [text(f"当前微信已绑定{binding.get('service', 'educoder')}服务，请先完成或解绑后再切换。"), services(state)], None
         if binding:
+            state["service"] = selected_service
             return begin_list(state)
-        state.update(phase="account", pending={}, actions={})
-        return [text("请输入你的头歌账号。每个微信只能绑定一个头歌账号，后续不可更改。")], None
+        state.update(phase="account", service=selected_service, pending={"service": selected_service}, actions={})
+        return [text(f"请输入你的{service_name}账号。每个微信只能绑定一个{service_name}账号，后续不可更改。")], None
     if phase == "idle":
         replies = [services(state)]
         if state.get("last_result"):
@@ -215,8 +223,10 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
         value = (content or "").strip()
         if menu_id or not value or len(value) > 256 or any(c in value for c in "\r\n\x00"):
             return [text(INVALID)], None
-        state.update(phase="password", pending={"account": value}, actions={})
-        return [text("请输入头歌密码。验证成功并确认后不可更改。")], None
+        state["pending"]["account"] = value
+        state.update(phase="password", actions={})
+        service_name = next((item["name"] for item in available(state) if item["code"] == state.get("service")), "服务")
+        return [text(f"请输入{service_name}密码。验证成功并确认后不可更改。")], None
     if phase == "password":
         # Passwords are opaque: never normalize width, trim spaces, or echo them.
         if menu_id or not content or len(content) > 1024 or "\x00" in content:
@@ -230,7 +240,9 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
             return [text("绑定成功，正在获取未全部完成的实训。")], "bind_and_list"
         if op == "cancel_bind":
             state.update(phase="account", pending={}, actions={})
-            return [text("未绑定，请重新输入头歌账号。")], None
+            service_name = next((item["name"] for item in available(state)
+                                 if item["code"] == state.get("service")), "服务")
+            return [text(f"未绑定，请重新输入{service_name}账号。")], None
         return [text(INVALID)], None
     if phase in {"select", "confirm"}:
         state["payment_ready"] = payment_enabled
@@ -255,17 +267,17 @@ def advance(state, binding, content, menu_id="", *, entered=False, now=0, execut
     return [text(INVALID)], None
 
 
-def verified(state, profile, *, invalid=False, unavailable=False, now=0):
+def verified(state, profile, *, invalid=False, unavailable=False, now=0, service_name="头歌"):
     if invalid:
         failures = state.get("failures", 0) + 1
         state.update(failures=failures, pending={}, phase="account", actions={})
         if failures >= 3:
             state.update(blocked_until=now + 86400, phase="idle")
             return [text(BLOCKED)]
-        return [text(f"账号或密码错误，剩余{3 - failures}次重试机会。请重新输入头歌账号。")]
+        return [text(f"账号或密码错误，剩余{3 - failures}次重试机会。请重新输入{service_name}账号。")]
     if unavailable:
         state.update(pending={}, phase="account", actions={})
-        return [text("头歌暂时无法验证（网络、验证码或服务异常），请稍后重试。")]
+        return [text("服务暂时无法验证（网络、验证码或服务异常），请稍后重试。")]
     state.update(phase="bind", failures=0, blocked_until=0, profile=profile)
     label = f"验证成功\n登录号：{profile['login']}\n用户名：{profile['username']}\n手机号：{profile['phone']}"
     return [menu(state, label, [("重新输入账号", {"op": "cancel_bind"}),

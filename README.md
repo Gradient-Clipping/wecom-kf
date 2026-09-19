@@ -48,6 +48,33 @@ uv run --env-file .env python -m wecom_kf.worker actions
 uv run --env-file .env python -m wecom_kf.worker executor
 ```
 
+The administrator console is a separately built Vue 3 application in
+`frontend/`; it talks to the FastAPI JSON endpoints under `/admin/api`. For a
+local production-like preview, build it first and then start the fixture API:
+
+```powershell
+cd frontend
+npm ci
+npm run build
+cd ..
+uv run --frozen python -m tests.admin_preview
+```
+
+Open `http://127.0.0.1:8766/admin`. For hot reload, run `npm run dev` in
+`frontend/` and set `ADMIN_API_TARGET` to the backend URL. Full acceptance
+checks are in [docs/admin-local.md](docs/admin-local.md); the fixture uses
+disposable SQLite data and does not contact WeCom, SSO, payment, or production
+MySQL.
+
+For GitOps configuration, immutable task attribution, agent read-only views and
+the required schema-first rollout order, see [docs/integration-release.md](docs/integration-release.md).
+
+Shuori is registered as an optional service adapter and is disabled by default.
+Its customer-service flow uses the same binding, task, payment and progress
+contracts as EduCoder; the default grading mode is `full_score`, and score
+submission remains opt-in. See the [Shuori task plan](docs/suori-task-plan.md)
+and [missing-inputs checklist](docs/suori-missing-inputs.md) before enabling it.
+
 Populate callback and MySQL settings from `.env.example`. Startup creates the
 inbox table using the dedicated database account. MySQL integration tests run in
 CI against an isolated MySQL 8.4 service; set `TEST_MYSQL=1` and a database ending

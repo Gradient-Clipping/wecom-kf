@@ -19,6 +19,25 @@ class DialogTests(unittest.TestCase):
         d.advance(state, None, "１", now=1)
         self.assertEqual(state["phase"], "account")
 
+    def test_service_selection_routes_shuori_without_changing_legacy_flow(self):
+        state = {"available_services": [{"code": "shuori", "name": "朔日"}]}
+        d.advance(state, None, "朔日", now=1)
+        self.assertEqual(state["phase"], "account")
+        self.assertEqual(state["service"], "shuori")
+        self.assertEqual(state["pending"], {"service": "shuori"})
+        replies, kind = d.advance(state, None, "student", now=1)
+        self.assertIsNone(kind)
+        self.assertEqual(state["phase"], "password")
+        self.assertIn("朔日密码", replies[0]["text"]["content"])
+
+    def test_shuori_reselection_uses_service_name(self):
+        state = {"available_services": [{"code": "shuori", "name": "朔日"}],
+                 "phase": "bind", "service": "shuori"}
+        d.verified(state, {"login": "student", "username": "student", "phone": "未提供"})
+        replies, kind = d.advance(state, None, "重新输入账号", action(state, "cancel_bind"), now=1)
+        self.assertIsNone(kind)
+        self.assertIn("朔日账号", replies[0]["text"]["content"])
+
     def test_human_support_menu_and_typed_zero_with_educoder_closed(self):
         state = {"available_services": [], "human_support_enabled": True, "phase": "idle"}
         msg = d.services(state)

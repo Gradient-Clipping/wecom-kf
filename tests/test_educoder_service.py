@@ -49,6 +49,39 @@ class ServiceTests(unittest.TestCase):
         self.assertTrue(any("第3关" in value for value in progress if value))
         self.assertIn("第3关", result["failures"][0])
         self.assertNotIn("?", result["failures"][0])
+        self.assertEqual(result["total_challenges"], 1)
+        self.assertTrue(result["has_error"])
+        self.assertTrue(result["final"])
+
+    def test_failure_contains_provider_reason_and_not_a_placeholder(self):
+        client = Mock()
+        client.ensure_logged_in.return_value = {"login": "login"}
+        with tempfile.TemporaryDirectory() as directory:
+            bank = Path(directory) / "bank.sqlite"
+            bank.touch()
+            service = EduCoderService(SimpleNamespace(bank_path=str(bank)))
+            service.client = Mock(return_value=client)
+
+            def fake_solver(*args, **kwargs):
+                solver = Mock()
+
+                def solve(*_args, **_kwargs):
+                    return {"results": [{"position": 1, "challenge": "排序", "passed": False,
+                                          "error": "编译失败：变量 total 未定义"}],
+                            "skipped_completed_count": 0, "selected_count": 1}
+
+                solver.solve_shixun.side_effect = solve
+                return solver
+
+            with patch("wecom_kf.educoder_service.ShixunSolver", side_effect=fake_solver):
+                result = service.solve(
+                    {"account": "login", "password": "secret", "login_no": "login"},
+                    [{"title": "实验", "course_identifier": "c", "homework_id": "1",
+                      "challenges": [{"challenge_id": 1, "name": "排序", "position": 1}]}],
+                    lambda _value: None,
+                )
+        self.assertIn("编译失败", result["failures"][0])
+        self.assertNotEqual(result["failures"][0], "实训：实验\n第1关：排序")
 
 
 if __name__ == "__main__":
