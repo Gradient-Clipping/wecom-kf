@@ -6,6 +6,7 @@ implementation agents.
 """
 import ast
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 import unittest
@@ -16,7 +17,11 @@ from wecom_kf.payments import Payments
 from tests.test_payments import FakeStore, order
 
 
-ROOT = Path(__file__).resolve().parents[2]
+# The local development workspace keeps the related repositories next to
+# ``wecom-kf``. CI checks them out below ``CROSS_PROJECT_ROOT`` instead, so
+# keep the application root and dependency root independent of each other.
+WECOM_ROOT = Path(__file__).resolve().parents[1]
+ROOT = Path(os.environ.get("CROSS_PROJECT_ROOT", Path(__file__).resolve().parents[2]))
 
 
 class PaymentContextStore(FakeStore):
@@ -90,7 +95,7 @@ class CrossProjectAcceptanceTests(unittest.TestCase):
             self.assertNotIn(secret, section)
 
     def test_payment_solve_path_still_uses_store_enqueue(self):
-        source = (ROOT / "wecom-kf/src/wecom_kf/payments.py").read_text(encoding="utf-8")
+        source = (WECOM_ROOT / "src/wecom_kf/payments.py").read_text(encoding="utf-8")
         tree = ast.parse(source)
         calls = [node for node in ast.walk(tree)
                  if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
