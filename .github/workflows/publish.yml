@@ -25,27 +25,12 @@ jobs:
           --health-interval=5s --health-timeout=5s --health-retries=20
     steps:
       - uses: actions/checkout@v5
-      - name: Checkout cross-project acceptance dependencies
-        uses: actions/checkout@v5
-        with:
-          repository: Gradient-Clipping/lazycampus-agent
-          ref: main
-          path: cross-project/lazycampus-agent
-          persist-credentials: false
-      - name: Checkout GitOps contract repository
-        uses: actions/checkout@v5
-        with:
-          repository: Gradient-Clipping/server-gitops
-          ref: main
-          path: cross-project/server-gitops
-          persist-credentials: false
       - uses: astral-sh/setup-uv@v7
         with:
           python-version: "3.13"
       - run: uv sync --frozen
       - run: uv run --frozen python -m unittest discover -s tests -v
         env:
-          CROSS_PROJECT_ROOT: ${{ github.workspace }}/cross-project
           TEST_MYSQL: "1"
           MYSQL_HOST: 127.0.0.1
           MYSQL_DATABASE: educoder_wecom_test
